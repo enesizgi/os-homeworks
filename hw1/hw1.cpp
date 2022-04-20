@@ -6,6 +6,8 @@
 #include <fcntl.h>
 #include <sys/wait.h>
 
+#define BUFFER_SIZE 80
+
 std::pair<char *, std::vector<char **> *> &findBundle(std::string &s, std::vector<std::pair<char *, std::vector<char **> *> > &bundles)
 {
     for (int i = 0; i < bundles.size(); i++)
@@ -104,7 +106,7 @@ int main()
                     // char *next_bundle_out = next_bundle.output; // daha sonra kullan
                     // char *next_bundle_input = next_bundle.input; // daha sonra kullan
                     int stat;
-                    std::vector<std::pair<int, int> > pipe_ids_next; // it is current pipes, not next. Wrong naming
+                    std::vector<std::pair<int, int> > pipe_ids_curToRepeater; // it is current pipes, not next. Wrong naming
                     std::vector<std::string> curr_bundle_outputs;
                     int currentBundleSize = vec_current_bundle.second->size();
                     int nextBundleSize = vec_next_bundle.second->size();
@@ -112,19 +114,19 @@ int main()
                     {
                         int pipe_id[2];
                         pipe(pipe_id);
-                        pipe_ids_next.push_back(std::make_pair(pipe_id[0], pipe_id[1]));
+                        pipe_ids_curToRepeater.push_back(std::make_pair(pipe_id[0], pipe_id[1]));
                     }
                     int pid = fork();
                     std::vector<int> pidList;
 
                     if (pid == 0)
                     { // Repeater process
-                        std::vector<std::pair<int, int> > pipe_ids_forward;
+                        std::vector<std::pair<int, int> > pipe_ids_repeaterToNext;
                         for (int i = 0; i < nextBundleSize; i++)
                         {
                             int pipe_id[2];
                             pipe(pipe_id);
-                            pipe_ids_forward.push_back(std::make_pair(pipe_id[0], pipe_id[1]));
+                            pipe_ids_repeaterToNext.push_back(std::make_pair(pipe_id[0], pipe_id[1]));
                         }
                         std::vector<int> pidList3;
                         for (int k = 0; k < nextBundleSize; k++)
@@ -134,14 +136,14 @@ int main()
                             {
                                 for (int i = 0; i < nextBundleSize; i++)
                                 {
-                                    close(pipe_ids_forward[i].second);
+                                    close(pipe_ids_repeaterToNext[i].second);
                                     if (i != k)
                                     {
-                                        close(pipe_ids_forward[i].first);
+                                        close(pipe_ids_repeaterToNext[i].first);
                                     }
                                     else
                                     {
-                                        dup2(pipe_ids_forward[i].first, 1);
+                                        dup2(pipe_ids_repeaterToNext[i].first, 1);
                                     }
                                 }
 
@@ -167,23 +169,23 @@ int main()
                                 pidList3.push_back(pid);
                                 for (int i = 0; i < nextBundleSize; i++)
                                 {
-                                    close(pipe_ids_forward[i].first);
+                                    close(pipe_ids_repeaterToNext[i].first);
                                 }
                                 for (int i = 0; i < currentBundleSize; i++)
                                 {
-                                    close(pipe_ids_next[i].second);
+                                    close(pipe_ids_curToRepeater[i].second);
                                 }
                                 for (int i = 0; i < currentBundleSize; i++)
                                 {
                                     // read 256 bits from pipe
                                     curr_bundle_outputs[i] = "";
-                                    char buffer[80];
-                                    int size = read(pipe_ids_next[i].first, buffer, 80);
+                                    char buffer[BUFFER_SIZE];
+                                    int size = read(pipe_ids_curToRepeater[i].first, buffer, BUFFER_SIZE);
 
                                     while (1)
                                     {
-                                        int size = read(pipe_ids_next[i].first, buffer, 80);
-                                        if (size != 80)
+                                        int size = read(pipe_ids_curToRepeater[i].first, buffer, BUFFER_SIZE);
+                                        if (size != BUFFER_SIZE)
                                         {
                                             std::cout << "Error reading from pipe" << std::endl;
                                         }
@@ -192,8 +194,8 @@ int main()
                                             std::cout << "size: " << size << std::endl;
                                             for (int x = 0; x < nextBundleSize; x++)
                                             {
-                                                int write_size = write(pipe_ids_forward[x].second, buffer, 80);
-                                                if (write_size != 80)
+                                                int write_size = write(pipe_ids_repeaterToNext[x].second, buffer, BUFFER_SIZE);
+                                                if (write_size != BUFFER_SIZE)
                                                 {
                                                     curr_bundle_outputs[i].append(buffer);
                                                     std::cout << "Error writing to pipe" << std::endl;
@@ -229,14 +231,14 @@ int main()
                             {
                                 for (int i = 0; i < currentBundleSize; i++)
                                 {
-                                    close(pipe_ids_next[i].first);
+                                    close(pipe_ids_curToRepeater[i].first);
                                     if (i != b)
                                     {
-                                        close(pipe_ids_next[i].second);
+                                        close(pipe_ids_curToRepeater[i].second);
                                     }
                                     else
                                     {
-                                        dup2(pipe_ids_next[i].second, 1);
+                                        dup2(pipe_ids_curToRepeater[i].second, 1);
                                     }
                                 }
 
@@ -261,8 +263,8 @@ int main()
                             {
                                 for (int i = 0; i < currentBundleSize; i++)
                                 {
-                                    close(pipe_ids_next[i].first);
-                                    close(pipe_ids_next[i].second);
+                                    close(pipe_ids_curToRepeater[i].first);
+                                    close(pipe_ids_curToRepeater[i].second);
                                 }
                                 pidList2.push_back(pid);
                             }
@@ -270,8 +272,8 @@ int main()
 
                         for (int i = 0; i < currentBundleSize; i++)
                         {
-                            close(pipe_ids_next[i].first);
-                            close(pipe_ids_next[i].second);
+                            close(pipe_ids_curToRepeater[i].first);
+                            close(pipe_ids_curToRepeater[i].second);
                         }
 
                         for (int i = 0; i < pidList2.size(); i++)
