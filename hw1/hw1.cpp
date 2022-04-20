@@ -7,7 +7,7 @@
 #include <sys/wait.h>
 
 #define BUFFER_SIZE 80
-bool debugging = true;
+bool debugging = false;
 
 std::pair<char *, std::vector<char **> *> &findBundle(std::string &s, std::vector<std::pair<char *, std::vector<char **> *> > &bundles)
 {
@@ -212,6 +212,9 @@ int main()
                                     while (1)
                                     {
                                         int size = read(pipe_ids_curToRepeater[i].first, buffer, BUFFER_SIZE);
+                                        if (debugging) {
+                                            std::cout << "size: " << size << std::endl;
+                                        }
                                         if (size <= 0)
                                         {
                                             break;
@@ -232,6 +235,9 @@ int main()
                                             for (int x = 0; x < nextBundleSize; x++)
                                             {
                                                 int write_size = write(pipe_ids_repeaterToNext[x].second, buffer, BUFFER_SIZE);
+                                                if (debugging) {
+                                                    std::cout << "write_size: " << write_size << std::endl;
+                                                }
                                                 if (write_size != BUFFER_SIZE)
                                                 {
                                                     curr_bundle_outputs[i].append(buffer);
