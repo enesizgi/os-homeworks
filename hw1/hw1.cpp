@@ -7,6 +7,7 @@
 #include <sys/wait.h>
 
 #define BUFFER_SIZE 80
+bool debugging = true;
 
 std::pair<char *, std::vector<char **> *> &findBundle(std::string &s, std::vector<std::pair<char *, std::vector<char **> *> > &bundles)
 {
@@ -15,7 +16,10 @@ std::pair<char *, std::vector<char **> *> &findBundle(std::string &s, std::vecto
         std::string name = bundles[i].first;
         if (name == s)
         {
-            std::cout << "Found bundle: " << bundles[i].first << std::endl;
+            if (debugging)
+            {
+                std::cout << "Found bundle " << name << std::endl;
+            }
             return bundles[i];
         }
     }
@@ -78,7 +82,10 @@ int main()
         {
             if (is_executing)
             {
-                std::cout << "Already executing a bundle" << std::endl;
+                if (debugging)
+                {
+                    std::cout << "Already executing a bundle" << std::endl;
+                }
                 continue;
             }
             is_executing = true;
@@ -86,8 +93,11 @@ int main()
             std::vector<std::pair<int, int> > pipe_ids;
             for (int y = 0; y < bundle_count; y++)
             {
-                std::cout << "bundle_count: " << bundle_count << std::endl;
-                std::cout << "bundle execution y:" << y << std::endl;
+                if (debugging)
+                {
+                    std::cout << "bundle_count: " << bundle_count << std::endl;
+                    std::cout << "bundle execution y:" << y << std::endl;
+                }
                 bundle_execution &execution_bundle = parsedInput->command.bundles[y]; // should update for multiple bundles
                 char *execution_bundle_out = execution_bundle.output;
                 char *execution_bundle_input = execution_bundle.input;
@@ -95,16 +105,22 @@ int main()
                 std::pair<char *, std::vector<char **> *> &vec_current_bundle = findBundle(bundle_name, bundles);
                 int f_out = -1;
                 int f_in = -1;
-                std::cout << "bundle file test" << std::endl;
+                if (debugging)
+                {
+                    std::cout << "bundle file test" << std::endl;
+                }
                 if ((bundle_count > 1) && (y < bundle_count - 1))
                 { // creating repeater, middle elements
-                    std::cout << "creating repeater" << std::endl;
-                    std::cout << "y: " << y << std::endl;
+                    if (debugging)
+                    {
+                        std::cout << "creating repeater" << std::endl;
+                        std::cout << "y: " << y << std::endl;
+                    }
                     bundle_execution &next_bundle = parsedInput->command.bundles[y + 1];
                     std::string next_bundle_name_str = next_bundle.name;
                     std::pair<char *, std::vector<char **> *> &vec_next_bundle = findBundle(next_bundle_name_str, bundles);
-                    // char *next_bundle_out = next_bundle.output; // daha sonra kullan
-                    // char *next_bundle_input = next_bundle.input; // daha sonra kullan
+                    char *next_bundle_out = next_bundle.output;  // daha sonra kullan
+                    char *next_bundle_input = next_bundle.input; // daha sonra kullan
                     int stat;
                     std::vector<std::pair<int, int> > pipe_ids_curToRepeater; // it is current pipes, not next. Wrong naming
                     std::vector<std::string> curr_bundle_outputs;
@@ -147,7 +163,7 @@ int main()
                                     }
                                 }
 
-                                char **argument_list = vec_current_bundle.second->at(k);
+                                char **argument_list = vec_next_bundle.second->at(k);
 
                                 std::vector<char *> arguments;
                                 for (int x = 0; argument_list[x] != NULL; x++)
@@ -185,26 +201,35 @@ int main()
                                     while (1)
                                     {
                                         int size = read(pipe_ids_curToRepeater[i].first, buffer, BUFFER_SIZE);
+                                        if (size <= 0)
+                                        {
+                                            break;
+                                        }
                                         if (size != BUFFER_SIZE)
                                         {
-                                            std::cout << "Error reading from pipe" << std::endl;
+                                            if (debugging)
+                                            {
+                                                std::cout << "Error reading from pipe" << std::endl;
+                                            }
                                         }
-                                        if (size > 0)
+                                        if (size == BUFFER_SIZE)
                                         {
-                                            std::cout << "size: " << size << std::endl;
+                                            if (debugging)
+                                            {
+                                                std::cout << "size: " << size << std::endl;
+                                            }
                                             for (int x = 0; x < nextBundleSize; x++)
                                             {
                                                 int write_size = write(pipe_ids_repeaterToNext[x].second, buffer, BUFFER_SIZE);
                                                 if (write_size != BUFFER_SIZE)
                                                 {
                                                     curr_bundle_outputs[i].append(buffer);
-                                                    std::cout << "Error writing to pipe" << std::endl;
+                                                    if (debugging)
+                                                    {
+                                                        std::cout << "Error writing to pipe" << std::endl;
+                                                    }
                                                 }
                                             }
-                                        }
-                                        if (size <= 0)
-                                        {
-                                            break;
                                         }
                                     }
 
@@ -290,7 +315,10 @@ int main()
                 // update for multiple bundles
                 if (bundle_count == 1)
                 {
-                    std::cout << " below if y: " << y << std::endl;
+                    if (debugging)
+                    {
+                        std::cout << " below if y: " << y << std::endl;
+                    }
                     int process_size = vec_current_bundle.second->size();
                     std::vector<int> pids;
                     int stat;
