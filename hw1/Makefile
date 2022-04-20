@@ -1,5 +1,5 @@
-all: hw1.c parser.c
-	gcc -o hw1 hw1.c parser.c
+all: hw1.cpp parser.cpp
+	g++ -o hw1 parser.cpp hw1.cpp
 
 clean:
 	$(RM) hw1

@@ -1,6 +1,7 @@
 #include "parser.h"
+#include <iostream>
 
-int parse(char *line, int is_bundle_creation, parsed_input *parsedInput) {
+int parse(char* line, int is_bundle_creation, parsed_input *parsedInput) {
     if ( !parsedInput )
         return 0;
     int is_quoted;
