@@ -103,32 +103,50 @@ int main()
                     std::pair<char *, std::vector<char **> *> &vec_next_bundle = findBundle(next_bundle_name_str, bundles);
                     // char *next_bundle_out = next_bundle.output; // daha sonra kullan
                     // char *next_bundle_input = next_bundle.input; // daha sonra kullan
-                    int pipeThisToRepeater[2];
-                    pipe(pipeThisToRepeater);
-                    std::vector<int> pipe_ids_vec;
                     int stat;
+                    std::vector<std::pair<int, int> > pipe_ids_next; // it is current pipes, not next. Wrong naming
+                    std::vector<std::string> curr_bundle_outputs;
+                    int currentBundleSize = vec_current_bundle.second->size();
+                    int nextBundleSize = vec_next_bundle.second->size();
+                    for (int i = 0; i < currentBundleSize; i++)
+                    {
+                        int pipe_id[2];
+                        pipe(pipe_id);
+                        pipe_ids_next.push_back(std::make_pair(pipe_id[0], pipe_id[1]));
+                    }
                     int pid = fork();
+                    std::vector<int> pidList;
+
                     if (pid == 0)
-                    { // child process - repeater - for reading
-                        // take the outputs from current processes and send them to the next processes
-                        // create next processes with for loop
-                        dup2(pipeThisToRepeater[0], 0);
-                        close(pipeThisToRepeater[1]);
-                        close(pipeThisToRepeater[0]);
-                        std::vector<int> pipe_ids_vec;
-                        for (int b = 0; b < vec_next_bundle.second->size(); b++)
+                    { // Repeater process
+                        std::vector<std::pair<int, int> > pipe_ids_forward;
+                        for (int i = 0; i < nextBundleSize; i++)
                         {
-                            int pipeRepeatorToNext[2];
-                            pipe(pipeRepeatorToNext);
-                            char **args = vec_next_bundle.second->at(b);
+                            int pipe_id[2];
+                            pipe(pipe_id);
+                            pipe_ids_forward.push_back(std::make_pair(pipe_id[0], pipe_id[1]));
+                        }
+                        std::vector<int> pidList3;
+                        for (int k = 0; k < nextBundleSize; k++)
+                        {
                             int pid = fork();
                             if (pid == 0)
-                            { // child process - current process
-                              // run current process here
-                                dup2(pipeRepeatorToNext[0], 0);
-                                close(pipeRepeatorToNext[1]);
-                                close(pipeRepeatorToNext[0]);
-                                char **argument_list = vec_next_bundle.second->at(b);
+                            {
+                                for (int i = 0; i < nextBundleSize; i++)
+                                {
+                                    close(pipe_ids_forward[i].second);
+                                    if (i != k)
+                                    {
+                                        close(pipe_ids_forward[i].first);
+                                    }
+                                    else
+                                    {
+                                        dup2(pipe_ids_forward[i].first, 1);
+                                    }
+                                }
+
+                                char **argument_list = vec_current_bundle.second->at(k);
+
                                 std::vector<char *> arguments;
                                 for (int x = 0; argument_list[x] != NULL; x++)
                                 {
@@ -141,44 +159,89 @@ int main()
                                 {
                                     argument_list_char[i] = arguments[i];
                                 }
+
                                 execvp(arguments[0], argument_list_char);
                             }
                             else
-                            { // parent - current process - to redirect outputs - read
-                                // wait for current process to finish
-                                dup2(pipeRepeatorToNext[1], 1);
-                                close(pipeRepeatorToNext[0]);
-                                close(pipeRepeatorToNext[1]);
-                                pipe_ids_vec.push_back(pid);
+                            {
+                                pidList3.push_back(pid);
+                                for (int i = 0; i < nextBundleSize; i++)
+                                {
+                                    close(pipe_ids_forward[i].first);
+                                }
+                                for (int i = 0; i < currentBundleSize; i++)
+                                {
+                                    close(pipe_ids_next[i].second);
+                                }
+                                for (int i = 0; i < currentBundleSize; i++)
+                                {
+                                    // read 256 bits from pipe
+                                    curr_bundle_outputs[i] = "";
+                                    char buffer[80];
+                                    int size = read(pipe_ids_next[i].first, buffer, 80);
+
+                                    while (1)
+                                    {
+                                        int size = read(pipe_ids_next[i].first, buffer, 80);
+                                        if (size != 80)
+                                        {
+                                            std::cout << "Error reading from pipe" << std::endl;
+                                        }
+                                        if (size > 0)
+                                        {
+                                            std::cout << "size: " << size << std::endl;
+                                            for (int x = 0; x < nextBundleSize; x++)
+                                            {
+                                                int write_size = write(pipe_ids_forward[x].second, buffer, 80);
+                                                if (write_size != 80)
+                                                {
+                                                    curr_bundle_outputs[i].append(buffer);
+                                                    std::cout << "Error writing to pipe" << std::endl;
+                                                }
+                                            }
+                                        }
+                                        if (size <= 0)
+                                        {
+                                            break;
+                                        }
+                                    }
+
+                                    // write 256 bits to pipe
+                                    // write(pipe_ids[i].second, buffer, 256);
+                                }
                             }
                         }
-
-                        for (int v = 0; v < pipe_ids_vec.size(); v++)
+                        for (int i = 0; i < pidList3.size(); i++)
                         {
-                            waitpid(pipe_ids_vec[v], &stat, 0);
-                            kill(pipe_ids_vec[v], SIGKILL);
+                            waitpid(pidList3[i], &stat, 0);
+                            kill(pidList3[i], SIGKILL);
                         }
                     }
                     else
-                    { // parent - current bundle - to redirect outputs - write
-                        // run current processes here and redirect outputs to repeater
-                        // create current processes here
-                        dup2(pipeThisToRepeater[1], 1);
-                        close(pipeThisToRepeater[0]);
-                        close(pipeThisToRepeater[1]);
-                        // close(f_out);
-                        // close(f_in);
-                        std::vector<int> pids_current;
-                        int stat;
-                        int current_proc_size = vec_current_bundle.second->size();
-                        for (int z = 0; z < current_proc_size; z++)
+                    {
+                        // parent process
+                        std::vector<int> pidList2;
+                        pidList.push_back(pid);
+                        for (int b = 0; b < currentBundleSize; b++)
                         {
-                            char **args = vec_current_bundle.second->at(z);
                             int pid = fork();
                             if (pid == 0)
-                            { // child process - current process
-                              // run current process here
-                                char **argument_list = vec_current_bundle.second->at(z);
+                            {
+                                for (int i = 0; i < currentBundleSize; i++)
+                                {
+                                    close(pipe_ids_next[i].first);
+                                    if (i != b)
+                                    {
+                                        close(pipe_ids_next[i].second);
+                                    }
+                                    else
+                                    {
+                                        dup2(pipe_ids_next[i].second, 1);
+                                    }
+                                }
+
+                                char **argument_list = vec_current_bundle.second->at(b);
+
                                 std::vector<char *> arguments;
                                 for (int x = 0; argument_list[x] != NULL; x++)
                                 {
@@ -191,81 +254,96 @@ int main()
                                 {
                                     argument_list_char[i] = arguments[i];
                                 }
+
                                 execvp(arguments[0], argument_list_char);
                             }
                             else
-                            { // parent - current process - to redirect outputs - read
-                                // wait for current process to finish
-                                pids_current.push_back(pid);
+                            {
+                                for (int i = 0; i < currentBundleSize; i++)
+                                {
+                                    close(pipe_ids_next[i].first);
+                                    close(pipe_ids_next[i].second);
+                                }
+                                pidList2.push_back(pid);
                             }
                         }
 
-                        for (int j = 0; j < pids_current.size(); j++)
+                        for (int i = 0; i < currentBundleSize; i++)
                         {
-                            waitpid(pids_current[j], &stat, 0);
-                            kill(pids_current[j], SIGKILL);
+                            close(pipe_ids_next[i].first);
+                            close(pipe_ids_next[i].second);
+                        }
+
+                        for (int i = 0; i < pidList2.size(); i++)
+                        {
+                            waitpid(pidList2[i], &stat, 0);
+                            kill(pidList2[i], SIGKILL);
                         }
                     }
+
                     waitpid(pid, &stat, 0);
                     kill(pid, SIGKILL);
                     break;
                 }
                 // update for multiple bundles
-                std::cout << " below if y: " << y << std::endl;
-                int process_size = vec_current_bundle.second->size();
-                std::vector<int> pids;
-                int stat;
-                for (int j = 0; j < process_size; j++)
+                if (bundle_count == 1)
                 {
-                    int f_out = -1;
-                    int f_in = -1;
-                    if (execution_bundle_out != NULL)
+                    std::cout << " below if y: " << y << std::endl;
+                    int process_size = vec_current_bundle.second->size();
+                    std::vector<int> pids;
+                    int stat;
+                    for (int j = 0; j < process_size; j++)
                     {
-                        f_out = open(execution_bundle_out, O_WRONLY | O_CREAT | O_APPEND, 0644);
-                    }
-                    int pid = fork();
-                    if (pid == 0)
-                    { // child
+                        int f_out = -1;
+                        int f_in = -1;
                         if (execution_bundle_out != NULL)
                         {
-                            dup2(f_out, 1);
+                            f_out = open(execution_bundle_out, O_WRONLY | O_CREAT | O_APPEND, 0644);
                         }
-                        if (execution_bundle_input != NULL)
+                        int pid = fork();
+                        if (pid == 0)
+                        { // child
+                            if (execution_bundle_out != NULL)
+                            {
+                                dup2(f_out, 1);
+                            }
+                            if (execution_bundle_input != NULL)
+                            {
+                                f_in = open(execution_bundle_input, O_RDONLY);
+                                dup2(f_in, 0);
+                            }
+                            char **argument_list = vec_current_bundle.second->at(j);
+                            std::vector<char *> arguments;
+                            for (int x = 0; argument_list[x] != NULL; x++)
+                            {
+                                arguments.push_back(argument_list[x]);
+                            }
+                            arguments.push_back(NULL);
+                            // convert arguments vector to char**
+                            char **argument_list_char = new char *[arguments.size()];
+                            for (int i = 0; i < arguments.size(); i++)
+                            {
+                                argument_list_char[i] = arguments[i];
+                            }
+                            execvp(arguments[0], argument_list_char);
+                        }
+                        else if (pid < 0)
                         {
-                            f_in = open(execution_bundle_input, O_RDONLY);
-                            dup2(f_in, 0);
+                            // std::cout << "fork failed" << std::endl;
+                            continue;
                         }
-                        char **argument_list = vec_current_bundle.second->at(j);
-                        std::vector<char *> arguments;
-                        for (int x = 0; argument_list[x] != NULL; x++)
+                        else
                         {
-                            arguments.push_back(argument_list[x]);
+                            pids.push_back(pid);
+                            // std::cout << "child process" << std::endl;
                         }
-                        arguments.push_back(NULL);
-                        // convert arguments vector to char**
-                        char **argument_list_char = new char *[arguments.size()];
-                        for (int i = 0; i < arguments.size(); i++)
-                        {
-                            argument_list_char[i] = arguments[i];
-                        }
-                        execvp(arguments[0], argument_list_char);
                     }
-                    else if (pid < 0)
-                    {
-                        // std::cout << "fork failed" << std::endl;
-                        continue;
-                    }
-                    else
-                    {
-                        pids.push_back(pid);
-                        // std::cout << "child process" << std::endl;
-                    }
-                }
 
-                for (int p = 0; p < pids.size(); p++)
-                {
-                    waitpid(pids[p], &stat, 0);
-                    kill(pids[p], SIGKILL);
+                    for (int p = 0; p < pids.size(); p++)
+                    {
+                        waitpid(pids[p], &stat, 0);
+                        kill(pids[p], SIGKILL);
+                    }
                 }
             }
             is_executing = false;
