@@ -103,10 +103,9 @@ int main()
                 char *execution_bundle_input = execution_bundle.input;
                 std::string bundle_name = execution_bundle.name;
                 std::pair<char *, std::vector<char **> *> &vec_current_bundle = findBundle(bundle_name, bundles);
-                int f_out = -1;
-                int f_in = -1;
                 if (debugging)
                 {
+                    std::cout << "current bundle name: " << vec_current_bundle.first << std::endl;
                     std::cout << "bundle file test" << std::endl;
                 }
                 if ((bundle_count > 1) && (y < bundle_count - 1))
@@ -121,6 +120,9 @@ int main()
                     std::pair<char *, std::vector<char **> *> &vec_next_bundle = findBundle(next_bundle_name_str, bundles);
                     char *next_bundle_out = next_bundle.output;  // daha sonra kullan
                     char *next_bundle_input = next_bundle.input; // daha sonra kullan
+                    if (debugging) {
+                        std::cout << "next bundle name: " << vec_next_bundle.first << std::endl;
+                    }
                     int stat;
                     std::vector<std::pair<int, int> > pipe_ids_curToRepeater; // it is current pipes, not next. Wrong naming
                     std::vector<std::string> curr_bundle_outputs;
@@ -157,10 +159,14 @@ int main()
                                     {
                                         close(pipe_ids_repeaterToNext[i].first);
                                     }
-                                    else
-                                    {
-                                        dup2(pipe_ids_repeaterToNext[i].first, 1);
-                                    }
+                                }
+                                dup2(pipe_ids_repeaterToNext[k].first, 0);
+
+                                if (next_bundle_out != NULL)
+                                {
+                                    int f_out = open(next_bundle_out, O_WRONLY | O_CREAT | O_APPEND, 0644);
+                                    dup2(f_out, 1);
+                                    close(f_out);
                                 }
 
                                 char **argument_list = vec_next_bundle.second->at(k);
@@ -182,6 +188,9 @@ int main()
                             }
                             else
                             {
+                                if (debugging) {
+                                    std::cout << "pid: " << pid << std::endl;
+                                }
                                 pidList3.push_back(pid);
                                 for (int i = 0; i < nextBundleSize; i++)
                                 {
@@ -197,7 +206,9 @@ int main()
                                     curr_bundle_outputs[i] = "";
                                     char buffer[BUFFER_SIZE];
                                     int size = read(pipe_ids_curToRepeater[i].first, buffer, BUFFER_SIZE);
-
+                                    if (debugging) {
+                                        std::cout << "size: " << size << std::endl;
+                                    }
                                     while (1)
                                     {
                                         int size = read(pipe_ids_curToRepeater[i].first, buffer, BUFFER_SIZE);
@@ -261,10 +272,14 @@ int main()
                                     {
                                         close(pipe_ids_curToRepeater[i].second);
                                     }
-                                    else
-                                    {
-                                        dup2(pipe_ids_curToRepeater[i].second, 1);
-                                    }
+                                }
+                                dup2(pipe_ids_curToRepeater[b].second, 1);
+
+                                if (execution_bundle_input != NULL)
+                                {
+                                    int f_in = open(execution_bundle_input, O_RDONLY);
+                                    dup2(f_in, 0);
+                                    close(f_in);
                                 }
 
                                 char **argument_list = vec_current_bundle.second->at(b);
@@ -325,7 +340,6 @@ int main()
                     for (int j = 0; j < process_size; j++)
                     {
                         int f_out = -1;
-                        int f_in = -1;
                         if (execution_bundle_out != NULL)
                         {
                             f_out = open(execution_bundle_out, O_WRONLY | O_CREAT | O_APPEND, 0644);
@@ -339,8 +353,9 @@ int main()
                             }
                             if (execution_bundle_input != NULL)
                             {
-                                f_in = open(execution_bundle_input, O_RDONLY);
+                                int f_in = open(execution_bundle_input, O_RDONLY);
                                 dup2(f_in, 0);
+                                close(f_in);
                             }
                             char **argument_list = vec_current_bundle.second->at(j);
                             std::vector<char *> arguments;
