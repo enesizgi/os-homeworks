@@ -3,7 +3,6 @@
 void parse(parsed_input* inp, char *line) {
     char *tmp;
     unsigned long size;
-
     size = strlen(line);
 
     if ( line[size-1] == '\n' )
