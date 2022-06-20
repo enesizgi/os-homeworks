@@ -5,8 +5,24 @@
     <option name="openedFilesInfos">
       <list>
         <OpenedFileInfo>
-          <option name="caretOffset" value="215" />
+          <option name="caretOffset" value="2920" />
+          <option name="fileUrl" value="file://$PROJECT_DIR$/fat32.h" />
+        </OpenedFileInfo>
+        <OpenedFileInfo>
+          <option name="caretOffset" value="0" />
+          <option name="fileUrl" value="file://$PROJECT_DIR$/parser.h" />
+        </OpenedFileInfo>
+        <OpenedFileInfo>
+          <option name="caretOffset" value="130" />
+          <option name="fileUrl" value="file://$PROJECT_DIR$/parser.c" />
+        </OpenedFileInfo>
+        <OpenedFileInfo>
+          <option name="caretOffset" value="349" />
           <option name="fileUrl" value="file://$PROJECT_DIR$/Makefile" />
+        </OpenedFileInfo>
+        <OpenedFileInfo>
+          <option name="caretOffset" value="1001" />
+          <option name="fileUrl" value="file://$PROJECT_DIR$/main.cpp" />
         </OpenedFileInfo>
       </list>
     </option>
