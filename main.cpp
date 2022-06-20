@@ -5,8 +5,8 @@
 
 using namespace std;
 
-void ls_command (parsed_input& input, FILE& imgFile, BPB_struct& BPBstruct) {
-
+void ls_command (parsed_input& input, FILE*& imgFile, BPB_struct& BPBstruct) {
+    cout << input.type << endl;
 }
 
 int main(int argc, char *argv[]) {
@@ -34,14 +34,23 @@ int main(int argc, char *argv[]) {
     while (true) {
         string line;
         std::getline(std::cin, line);
-        parsed_input* input = new parsed_input;
+
+        if (line == "quit") {
+            return 0;
+        }
+
+        auto* input = new parsed_input;
         char* input_chr = new char[line.length() + 1];
         strcpy(input_chr, line.c_str());
         parse(input, input_chr);
 
         if (input->type == LS) {
-            ls_command(*input, *imgFile, *BPBstruct);
+            ls_command(*input, imgFile, *BPBstruct);
         }
+
+        clean_input(input);
+        delete input;
+        delete[] input_chr;
     }
     return 0;
 }
