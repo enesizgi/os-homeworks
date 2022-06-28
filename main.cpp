@@ -5,11 +5,12 @@
 
 using namespace std;
 
-void ls_command (parsed_input& input, FILE*& imgFile, BPB_struct& BPBstruct) {
+void ls_command (parsed_input& input, FILE*& imgFile, BPB_struct& BPBstruct, string& current_working_dir) {
     cout << input.type << endl;
 }
 
 int main(int argc, char *argv[]) {
+    string current_working_dir = "/";
     bool is_development = true; // TODO: Change this to false before submission
     if (argc != 2) {
         exit(1);
@@ -32,6 +33,7 @@ int main(int argc, char *argv[]) {
     }
 
     while (true) {
+        cout << current_working_dir << "> ";
         string line;
         std::getline(std::cin, line);
 
@@ -40,17 +42,16 @@ int main(int argc, char *argv[]) {
         }
 
         auto* input = new parsed_input;
-        char* input_chr = new char[line.length() + 1];
+        char* input_chr = new char[line.size() + 1];
         strcpy(input_chr, line.c_str());
         parse(input, input_chr);
 
         if (input->type == LS) {
-            ls_command(*input, imgFile, *BPBstruct);
+            ls_command(*input, imgFile, *BPBstruct, current_working_dir);
         }
 
         clean_input(input);
         delete input;
         delete[] input_chr;
     }
-    return 0;
 }
