@@ -8,6 +8,8 @@ using namespace std;
 
 uint32_t current_dir_cluster_no;
 
+string months_str[] = {"January", "February", "March", "April", "May", "June","July","August","September","October","November","December"};
+
 uint32_t get_fat_entry_at (FILE*& imgFile, uint32_t location);
 vector<uint32_t>* find_entries (uint32_t& first_cluster, FILE*& imgFile, BPB_struct& BPBstruct, uint16_t& beginning_of_fat_table, uint32_t& end_of_chain);
 string lfn_name_extract (FatFileEntry*& file_entry);
@@ -64,21 +66,22 @@ bool is_path_valid (vector<string>& path, FILE*& imgFile, BPB_struct& BPBstruct)
     return true;
 }
 
-string resolve_path (string& path, string& current_working_dir, FILE*& imgFile, BPB_struct& BPBstruct) {
+void split_path(vector<string>& result, string& path, string& current_working_dir) {
     string s = path.starts_with('/') ? path + "/" : current_working_dir + (current_working_dir != "/" ? "/" : "") + path + "/";
     s = path == "/" ? path : s;
     std::string delimiter = "/";
 
     size_t pos = 0;
     std::string token;
-    vector<string> result;
     while ((pos = s.find(delimiter)) != std::string::npos) {
         token = s.substr(0, pos);
         result.push_back(token);
         s.erase(0, pos + delimiter.length());
     }
-    vector<string> clean_result;
-    for (auto & i : result) {
+}
+
+void clean_path (vector<string>& clean_result, vector<string>& dirty_path) {
+    for (auto & i : dirty_path) {
         if (i.empty()) {
             clean_result.push_back(i);
         }
@@ -95,23 +98,31 @@ string resolve_path (string& path, string& current_working_dir, FILE*& imgFile, 
         }
         else clean_result.push_back(i);
     }
+}
+
+string resolve_path (string& path, string& current_working_dir, FILE*& imgFile, BPB_struct& BPBstruct) {
+    vector<string> result;
+    split_path(result, path, current_working_dir);
     if (result.empty()) {
         return current_working_dir;
     }
+
+    vector<string> clean_result;
+    clean_path(clean_result, result);
 
     if (!is_path_valid(clean_result, imgFile, BPBstruct)) {
         return current_working_dir;
     }
 
-    s.clear();
+    string s_tmp;
     for (int i = 0; i < clean_result.size(); i++) {
         if (i == clean_result.size() - 1 && clean_result.size() != 1) {
-            s += clean_result[i];
+            s_tmp += clean_result[i];
         }
-        else s += clean_result[i] + "/";
+        else s_tmp += clean_result[i] + "/";
     }
 
-    return s;
+    return s_tmp;
 }
 
 string lfn_name_extract (FatFileEntry*& file_entry) {
@@ -177,8 +188,49 @@ void cd_command (parsed_input& input, FILE*& imgFile, BPB_struct& BPBstruct, str
 
 void ls_command (parsed_input& input, FILE*& imgFile, BPB_struct& BPBstruct, string& current_working_dir) {
     // TODO: Handle deleted directories and files.
+    // TODO: Should LS handle this: ls -l dir2file.c or ls file.c ? Right now, this is not printing anything.
+    // TODO: Print last modified date and time. (DONE)
     string arg1 = input.arg1 != nullptr ? input.arg1 : "";
     string arg2 = input.arg2 != nullptr ? input.arg2 : "";
+    string backup_current_working_dir = current_working_dir;
+    bool is_cd_used = false;
+
+    if (!arg1.empty() && arg1 != "-l") {
+        vector<string> result;
+        split_path(result, arg1, current_working_dir);
+        if (result.empty()) {
+            return;
+        }
+
+        vector<string> clean_result;
+        clean_path(clean_result, result);
+
+        if (!is_path_valid(clean_result, imgFile, BPBstruct)) {
+            return;
+        }
+        cd_command(input, imgFile, BPBstruct, current_working_dir);
+        is_cd_used = true;
+    }
+    else if (arg1 == "-l" && !arg2.empty()) {
+        vector<string> result;
+        split_path(result, arg2, current_working_dir);
+        if (result.empty()) {
+            return;
+        }
+
+        vector<string> clean_result;
+        clean_path(clean_result, result);
+
+        if (!is_path_valid(clean_result, imgFile, BPBstruct)) {
+            return;
+        }
+
+        auto tmp_arg1 = input.arg1;
+        input.arg1 = input.arg2;
+        cd_command(input, imgFile, BPBstruct, current_working_dir);
+        is_cd_used = true;
+        input.arg1 = tmp_arg1;
+    }
 
     uint16_t beginning_of_fat_table = BPBstruct.ReservedSectorCount*BPBstruct.BytesPerSector;
     uint32_t end_of_chain = get_fat_entry_at(imgFile, beginning_of_fat_table);
@@ -200,13 +252,19 @@ void ls_command (parsed_input& input, FILE*& imgFile, BPB_struct& BPBstruct, str
             else {
                 if (str1.length() > 0) {
                     if (arg1 == "-l") {
+                        uint8_t hours = (tmp_file->msdos.modifiedTime & 0xf800) >> 11;
+                        uint8_t minutes = (tmp_file->msdos.modifiedTime & 0x7e0) >> 5;
+                        string month = months_str[(tmp_file->msdos.modifiedDate & 0x1e0) >> 5];
+                        uint8_t day = tmp_file->msdos.modifiedDate & 0x1f;
                         if ((tmp_file->msdos.attributes & 0x10) == 0x10) { // It is a directory.
                             if (j != 0 && print_counter != 0) cout << endl;
-                            cout << "drwx------ 1 root root 0 " << "<last_modified_date_and_time>" << " " << str1;
+                            cout << "drwx------ 1 root root 0 " << month << " " << to_string(day) << (hours < 10 ? " 0" : " ");
+                            cout << to_string(hours) << ":" << (minutes < 10 ? "0" : "") << to_string(minutes) << " " << str1;
                         }
                         else {
                             if (j != 0 && print_counter != 0) cout << endl;
-                            cout << "-rwx------ 1 root root " << tmp_file->msdos.fileSize << " " << "<last_modified_date_and_time>" << " " << str1;
+                            cout << "-rwx------ 1 root root " << tmp_file->msdos.fileSize << " " << month << " " << to_string(day) << (hours < 10 ? " 0" : " ");
+                            cout << to_string(hours) << ":" << (minutes < 10 ? "0" : "") << to_string(minutes) << " " << str1;
                         }
                     }
                     else {
@@ -223,6 +281,13 @@ void ls_command (parsed_input& input, FILE*& imgFile, BPB_struct& BPBstruct, str
     if (print_counter > 0) cout << endl;
     root_fat_entries.clear();
     delete root_fat_entries_p;
+
+    if (is_cd_used) {
+        auto tmp_arg1 = input.arg1;
+        input.arg1 = const_cast<char*>(backup_current_working_dir.c_str());
+        cd_command(input, imgFile, BPBstruct, current_working_dir);
+        input.arg1 = tmp_arg1;
+    }
 }
 
 int main(int argc, char *argv[]) {
