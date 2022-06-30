@@ -31,7 +31,7 @@ vector<FatFileEntry> get_fatFileEntries_in_cluster(uint32_t cluster_no, FILE*& i
     return FatFileEntries;
 }
 
-bool is_path_valid (vector<string>& path, FILE*& imgFile, BPB_struct& BPBstruct, bool is_file = false, FatFileEntry* file_entry_83 = nullptr) {
+bool is_path_valid (vector<string>& path, FILE*& imgFile, BPB_struct& BPBstruct, bool is_file = false, FatFileEntry* file_entry_83 = nullptr, bool shouldClusterNoChange = true) {
     if (path.empty()) return false;
 
     uint32_t nextCluster = BPBstruct.extended.RootCluster;
@@ -72,7 +72,7 @@ bool is_path_valid (vector<string>& path, FILE*& imgFile, BPB_struct& BPBstruct,
         if (!is_folder_found) return false;
     }
 //    cout << path[0] << endl;
-    current_dir_cluster_no = nextCluster;
+    if (shouldClusterNoChange) current_dir_cluster_no = nextCluster;
     return true;
 }
 
@@ -315,11 +315,12 @@ void cat_command(parsed_input& input, FILE*& imgFile, BPB_struct& BPBstruct, str
     clean_path(clean_result, result);
 
     FatFileEntry file_entry_83;
-    if (!is_path_valid(clean_result, imgFile, BPBstruct, true, &file_entry_83)) {
+    if (!is_path_valid(clean_result, imgFile, BPBstruct, true, &file_entry_83, false)) {
         return;
     }
 
-    auto* fat_entries_p = find_entries(current_dir_cluster_no, imgFile, BPBstruct);
+    uint32_t first_entry = file_entry_83.msdos.firstCluster;
+    auto* fat_entries_p = find_entries(first_entry, imgFile, BPBstruct);
     auto& fat_entries = *fat_entries_p;
 
     for (int i = 0; i < fat_entries.size(); i++) {
@@ -328,7 +329,10 @@ void cat_command(parsed_input& input, FILE*& imgFile, BPB_struct& BPBstruct, str
         fread(content, sizeof(content), 1, imgFile);
         cout << content;
     }
-    cout << endl;
+}
+
+void touch_command(parsed_input& input, FILE*& imgFile, BPB_struct& BPBstruct, string& current_working_dir) {
+
 }
 
 int main(int argc, char *argv[]) {
@@ -348,16 +352,16 @@ int main(int argc, char *argv[]) {
         exit(1);
     }
 
-    auto* BPBstruct = new BPB_struct;
-    size_t result = fread(BPBstruct, sizeof(BPB_struct), 1, imgFile);
+    BPB_struct BPBstruct;
+    size_t result = fread(&BPBstruct, sizeof(BPB_struct), 1, imgFile);
     if (result != 1) {
         exit(1);
     }
 
-    current_dir_cluster_no = BPBstruct->extended.RootCluster;
-    bytes_per_cluster = BPBstruct->BytesPerSector*BPBstruct->SectorsPerCluster;
-    beginning_of_clusters = (BPBstruct->ReservedSectorCount+BPBstruct->extended.FATSize*BPBstruct->NumFATs)*BPBstruct->BytesPerSector;
-    beginning_of_fat_table = BPBstruct->ReservedSectorCount*BPBstruct->BytesPerSector;
+    current_dir_cluster_no = BPBstruct.extended.RootCluster;
+    bytes_per_cluster = BPBstruct.BytesPerSector*BPBstruct.SectorsPerCluster;
+    beginning_of_clusters = (BPBstruct.ReservedSectorCount+BPBstruct.extended.FATSize*BPBstruct.NumFATs)*BPBstruct.BytesPerSector;
+    beginning_of_fat_table = BPBstruct.ReservedSectorCount*BPBstruct.BytesPerSector;
     end_of_chain = get_fat_entry_at(imgFile, beginning_of_fat_table);
 
     while (true) {
@@ -377,13 +381,16 @@ int main(int argc, char *argv[]) {
         parse(&input, input_chr);
 
         if (input.type == LS) {
-            ls_command(input, imgFile, *BPBstruct, current_working_dir);
+            ls_command(input, imgFile, BPBstruct, current_working_dir);
         }
         else if (input.type == CD) {
-            cd_command(input, imgFile, *BPBstruct, current_working_dir);
+            cd_command(input, imgFile, BPBstruct, current_working_dir);
         }
         else if (input.type == CAT) {
-            cat_command(input, imgFile, *BPBstruct, current_working_dir);
+            cat_command(input, imgFile, BPBstruct, current_working_dir);
+        }
+        else if (input.type == TOUCH) {
+            touch_command(input, imgFile, BPBstruct, current_working_dir);
         }
 
         clean_input(&input);
