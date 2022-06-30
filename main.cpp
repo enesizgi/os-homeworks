@@ -7,17 +7,18 @@
 using namespace std;
 
 uint32_t current_dir_cluster_no;
+uint32_t beginning_of_clusters;
+uint32_t bytes_per_cluster;
+uint16_t beginning_of_fat_table;
+uint32_t end_of_chain;
 
 string months_str[] = {"January", "February", "March", "April", "May", "June","July","August","September","October","November","December"};
 
 uint32_t get_fat_entry_at (FILE*& imgFile, uint32_t location);
-vector<uint32_t>* find_entries (uint32_t& first_cluster, FILE*& imgFile, BPB_struct& BPBstruct, uint16_t& beginning_of_fat_table, uint32_t& end_of_chain);
+vector<uint32_t>* find_entries (uint32_t& first_cluster, FILE*& imgFile, BPB_struct& BPBstruct);
 string lfn_name_extract (FatFileEntry*& file_entry);
 
 vector<FatFileEntry> get_fatFileEntries_in_cluster(uint32_t cluster_no, FILE*& imgFile, BPB_struct& BPBstruct) {
-    auto bytes_per_cluster = BPBstruct.BytesPerSector*BPBstruct.SectorsPerCluster;
-    auto beginning_of_clusters = (BPBstruct.ReservedSectorCount+BPBstruct.extended.FATSize*BPBstruct.NumFATs)*BPBstruct.BytesPerSector;
-
     fseek(imgFile, beginning_of_clusters + (cluster_no - BPBstruct.extended.RootCluster) * bytes_per_cluster, SEEK_SET);
     int size_of_fatFileEntry = sizeof(FatFileEntry);
     vector<FatFileEntry> FatFileEntries;
@@ -32,17 +33,15 @@ vector<FatFileEntry> get_fatFileEntries_in_cluster(uint32_t cluster_no, FILE*& i
 
 bool is_path_valid (vector<string>& path, FILE*& imgFile, BPB_struct& BPBstruct) {
     if (path.empty()) return false;
-    uint16_t beginning_of_fat_table = BPBstruct.ReservedSectorCount*BPBstruct.BytesPerSector;
-    uint32_t end_of_chain = get_fat_entry_at(imgFile, beginning_of_fat_table);
 
     uint32_t nextCluster = BPBstruct.extended.RootCluster;
     for (int i = 0; i < path.size() - 1; i++) {
-        auto* root_fat_entries_p = find_entries(nextCluster, imgFile, BPBstruct, beginning_of_fat_table, end_of_chain);
+        auto* root_fat_entries_p = find_entries(nextCluster, imgFile, BPBstruct);
         auto& root_fat_entries = *root_fat_entries_p;
         bool is_folder_found = false;
         string FatFileEntryName;
-        for (int j = 0; j < root_fat_entries.size(); j++) {
-            auto FatFileEntries = get_fatFileEntries_in_cluster(root_fat_entries[j], imgFile, BPBstruct);
+        for (unsigned int root_fat_entrie : root_fat_entries) {
+            auto FatFileEntries = get_fatFileEntries_in_cluster(root_fat_entrie, imgFile, BPBstruct);
             for (auto & FatFileEntrie : FatFileEntries) {
                 if (FatFileEntrie.lfn.attributes == 15) {
                     FatFileEntry* tmp = &FatFileEntrie;
@@ -159,7 +158,7 @@ uint32_t get_fat_entry_at (FILE*& imgFile, uint32_t location) {
     return get_fat_entry(imgFile);
 }
 
-vector<uint32_t>* find_entries (uint32_t& first_cluster, FILE*& imgFile, BPB_struct& BPBstruct, uint16_t& beginning_of_fat_table, uint32_t& end_of_chain) {
+vector<uint32_t>* find_entries (uint32_t& first_cluster, FILE*& imgFile, BPB_struct& BPBstruct) {
     fseek(imgFile, beginning_of_fat_table+8+(first_cluster - BPBstruct.extended.RootCluster)*4, SEEK_SET);
     auto* fat_entries_p = new vector<uint32_t>;
     auto& fat_entries = *fat_entries_p;
@@ -232,12 +231,10 @@ void ls_command (parsed_input& input, FILE*& imgFile, BPB_struct& BPBstruct, str
         input.arg1 = tmp_arg1;
     }
 
-    uint16_t beginning_of_fat_table = BPBstruct.ReservedSectorCount*BPBstruct.BytesPerSector;
-    uint32_t end_of_chain = get_fat_entry_at(imgFile, beginning_of_fat_table);
-    auto* root_fat_entries_p = find_entries(current_dir_cluster_no, imgFile, BPBstruct, beginning_of_fat_table, end_of_chain);
+    auto* root_fat_entries_p = find_entries(current_dir_cluster_no, imgFile, BPBstruct);
     auto& root_fat_entries = *root_fat_entries_p;
-    auto bytes_per_cluster = BPBstruct.BytesPerSector*BPBstruct.SectorsPerCluster;
-    auto beginning_of_clusters = (BPBstruct.ReservedSectorCount+BPBstruct.extended.FATSize*BPBstruct.NumFATs)*BPBstruct.BytesPerSector;
+//    auto bytes_per_cluster = BPBstruct.BytesPerSector*BPBstruct.SectorsPerCluster;
+//    auto beginning_of_clusters = (BPBstruct.ReservedSectorCount+BPBstruct.extended.FATSize*BPBstruct.NumFATs)*BPBstruct.BytesPerSector;
     int print_counter = 0;
     string str1; // TODO: MAYBE SHOULD MOVE THIS TO A LEVEL UP OUTSIDE THIS FOR LOOP. (DONE)
     for (auto& root_fat_entry : root_fat_entries) {
@@ -314,6 +311,10 @@ int main(int argc, char *argv[]) {
     }
 
     current_dir_cluster_no = BPBstruct->extended.RootCluster;
+    bytes_per_cluster = BPBstruct->BytesPerSector*BPBstruct->SectorsPerCluster;
+    beginning_of_clusters = (BPBstruct->ReservedSectorCount+BPBstruct->extended.FATSize*BPBstruct->NumFATs)*BPBstruct->BytesPerSector;
+    beginning_of_fat_table = BPBstruct->ReservedSectorCount*BPBstruct->BytesPerSector;
+    end_of_chain = get_fat_entry_at(imgFile, beginning_of_fat_table);
 
     while (true) {
         cout << current_working_dir << "> ";
