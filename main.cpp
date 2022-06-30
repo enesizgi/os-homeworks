@@ -35,7 +35,8 @@ bool is_path_valid (vector<string>& path, FILE*& imgFile, BPB_struct& BPBstruct,
     if (path.empty()) return false;
 
     uint32_t nextCluster = BPBstruct.extended.RootCluster;
-    for (int i = 0; i < path.size() - 1; i++) {
+    size_t pathSize = path.size();
+    for (int i = 0; i < pathSize - 1; i++) {
         auto* root_fat_entries_p = find_entries(nextCluster, imgFile, BPBstruct);
         auto& root_fat_entries = *root_fat_entries_p;
         bool is_folder_found = false;
@@ -50,7 +51,11 @@ bool is_path_valid (vector<string>& path, FILE*& imgFile, BPB_struct& BPBstruct,
                     if (FatFileEntrie.lfn.sequence_number == 0xE5) is_deleted = true;
                 }
                 else {
-                    if (!is_deleted && (FatFileEntrie.msdos.attributes & 0x10) == 0x10 && path[i+1] == FatFileEntryName) {
+                    if (pathSize - 2 == i && is_file && path[i+1] == FatFileEntryName) { // It is a file.
+                        is_folder_found = true;
+                        nextCluster = FatFileEntrie.msdos.firstCluster;
+                    }
+                    else if ((FatFileEntrie.msdos.attributes & 0x10) == 0x10 && path[i+1] == FatFileEntryName) { // It is a directory.
                         is_folder_found = true;
                         nextCluster = FatFileEntrie.msdos.firstCluster;
                     }
