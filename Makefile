@@ -1,5 +1,5 @@
 all: main.cpp parser.o fat32.h
-	g++ -O3 --std=c++20 *.o main.cpp -o hw3
+	g++ -O3 --std=c++17 *.o main.cpp -o hw3
 parser: parser.h parser.c
 	g++ -O3 -c parser.c -o parser.o
 image:
