@@ -31,7 +31,7 @@ vector<FatFileEntry> get_fatFileEntries_in_cluster(uint32_t cluster_no, FILE*& i
     return FatFileEntries;
 }
 
-bool is_path_valid (vector<string>& path, FILE*& imgFile, BPB_struct& BPBstruct, bool is_file = false) {
+bool is_path_valid (vector<string>& path, FILE*& imgFile, BPB_struct& BPBstruct, bool is_file = false, FatFileEntry* file_entry_83 = nullptr) {
     if (path.empty()) return false;
 
     uint32_t nextCluster = BPBstruct.extended.RootCluster;
@@ -54,6 +54,9 @@ bool is_path_valid (vector<string>& path, FILE*& imgFile, BPB_struct& BPBstruct,
                     if (pathSize - 2 == i && is_file && path[i+1] == FatFileEntryName) { // It is a file.
                         is_folder_found = true;
                         nextCluster = FatFileEntrie.msdos.firstCluster;
+                        if (file_entry_83 != nullptr) {
+                            *file_entry_83 = FatFileEntrie;
+                        }
                     }
                     else if ((FatFileEntrie.msdos.attributes & 0x10) == 0x10 && path[i+1] == FatFileEntryName) { // It is a directory.
                         is_folder_found = true;
@@ -74,7 +77,7 @@ bool is_path_valid (vector<string>& path, FILE*& imgFile, BPB_struct& BPBstruct,
 }
 
 void split_path(vector<string>& result, string& path, string& current_working_dir) {
-    string s = path.starts_with('/') ? path + "/" : current_working_dir + (current_working_dir != "/" ? "/" : "") + path + "/";
+    string s = path.substr(0,1) == "/" ? path + "/" : current_working_dir + (current_working_dir != "/" ? "/" : "") + path + "/";
     s = path == "/" ? path : s;
     std::string delimiter = "/";
 
@@ -311,10 +314,21 @@ void cat_command(parsed_input& input, FILE*& imgFile, BPB_struct& BPBstruct, str
     vector<string> clean_result;
     clean_path(clean_result, result);
 
-    if (!is_path_valid(clean_result, imgFile, BPBstruct, true)) {
+    FatFileEntry file_entry_83;
+    if (!is_path_valid(clean_result, imgFile, BPBstruct, true, &file_entry_83)) {
         return;
     }
 
+    auto* fat_entries_p = find_entries(current_dir_cluster_no, imgFile, BPBstruct);
+    auto& fat_entries = *fat_entries_p;
+
+    for (int i = 0; i < fat_entries.size(); i++) {
+        char content[1024] = {0};
+        fseek(imgFile, beginning_of_clusters + (fat_entries[i] - BPBstruct.extended.RootCluster) * bytes_per_cluster, SEEK_SET);
+        fread(content, sizeof(content), 1, imgFile);
+        cout << content;
+    }
+    cout << endl;
 }
 
 int main(int argc, char *argv[]) {
@@ -357,23 +371,22 @@ int main(int argc, char *argv[]) {
 
         if (line.length() == 0) continue;
 
-        auto* input = new parsed_input;
+        parsed_input input;
         char* input_chr = new char[line.size() + 1];
         strcpy(input_chr, line.c_str());
-        parse(input, input_chr);
+        parse(&input, input_chr);
 
-        if (input->type == LS) {
-            ls_command(*input, imgFile, *BPBstruct, current_working_dir);
+        if (input.type == LS) {
+            ls_command(input, imgFile, *BPBstruct, current_working_dir);
         }
-        else if (input->type == CD) {
-            cd_command(*input, imgFile, *BPBstruct, current_working_dir);
+        else if (input.type == CD) {
+            cd_command(input, imgFile, *BPBstruct, current_working_dir);
         }
-        else if (input->type == CAT) {
-            cat_command(*input, imgFile, *BPBstruct, current_working_dir);
+        else if (input.type == CAT) {
+            cat_command(input, imgFile, *BPBstruct, current_working_dir);
         }
 
-        clean_input(input);
-        delete input;
+        clean_input(&input);
         delete[] input_chr;
     }
 }
