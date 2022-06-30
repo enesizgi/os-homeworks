@@ -71,7 +71,6 @@ bool is_path_valid (vector<string>& path, FILE*& imgFile, BPB_struct& BPBstruct,
         delete root_fat_entries_p;
         if (!is_folder_found) return false;
     }
-//    cout << path[0] << endl;
     if (shouldClusterNoChange) current_dir_cluster_no = nextCluster;
     return true;
 }
@@ -110,6 +109,15 @@ void clean_path (vector<string>& clean_result, vector<string>& dirty_path) {
     }
 }
 
+void concat_string (string& str, vector<string>& strings) {
+    for (int i = 0; i < strings.size(); i++) {
+        if (i == strings.size() - 1 && strings.size() != 1) {
+            str += strings[i];
+        }
+        else str += strings[i] + "/";
+    }
+}
+
 string resolve_path (string& path, string& current_working_dir, FILE*& imgFile, BPB_struct& BPBstruct) {
     vector<string> result;
     split_path(result, path, current_working_dir);
@@ -125,13 +133,7 @@ string resolve_path (string& path, string& current_working_dir, FILE*& imgFile, 
     }
 
     string s_tmp;
-    for (int i = 0; i < clean_result.size(); i++) {
-        if (i == clean_result.size() - 1 && clean_result.size() != 1) {
-            s_tmp += clean_result[i];
-        }
-        else s_tmp += clean_result[i] + "/";
-    }
-
+    concat_string(s_tmp, clean_result);
     return s_tmp;
 }
 
@@ -245,9 +247,9 @@ void ls_command (parsed_input& input, FILE*& imgFile, BPB_struct& BPBstruct, str
     string str1; // TODO: MAYBE SHOULD MOVE THIS TO A LEVEL UP OUTSIDE THIS FOR LOOP. (DONE)
     bool is_deleted = false;
     for (auto& root_fat_entry : root_fat_entries) {
-        fseek(imgFile, beginning_of_clusters + (root_fat_entry-2)*bytes_per_cluster, SEEK_SET);
+        fseek(imgFile, beginning_of_clusters + (root_fat_entry - BPBstruct.extended.RootCluster)*bytes_per_cluster, SEEK_SET); // TODO: CHECK IF ROOTCLUSTER EDIT WORKS
         int size_of_fatFileEntry = sizeof(FatFileEntry);
-        auto* tmp_file = new FatFileEntry;
+        auto* tmp_file = new FatFileEntry; // TODO: Change this to stack allocation.
         for (int j = 0; j < bytes_per_cluster; j+=size_of_fatFileEntry) {
             fread(tmp_file, size_of_fatFileEntry, 1, imgFile);
             if (tmp_file->lfn.attributes == 15) { // It is LFN.
@@ -332,6 +334,53 @@ void cat_command(parsed_input& input, FILE*& imgFile, BPB_struct& BPBstruct, str
 }
 
 void touch_command(parsed_input& input, FILE*& imgFile, BPB_struct& BPBstruct, string& current_working_dir) {
+    if (input.arg1 == nullptr) return;
+    string path(input.arg1);
+
+    vector<string> result;
+    split_path(result, path, current_working_dir);
+    if (result.empty()) {
+        return;
+    }
+
+    vector<string> clean_result;
+    clean_path(clean_result, result);
+
+    if (is_path_valid(clean_result, imgFile, BPBstruct, true, nullptr, false)) return; // Checks if file exists, it shouldn't
+
+    string filename = clean_result.back();
+    clean_result.pop_back();
+    if (!is_path_valid(clean_result, imgFile, BPBstruct, false, nullptr, false)) return; // Checks if directory exists, it should
+
+    string backup_current_working_dir = current_working_dir;
+    auto tmp_arg1 = input.arg1;
+    string cd_directory;
+    concat_string(cd_directory, clean_result);
+    input.arg1 = const_cast<char*>(cd_directory.c_str());
+    cd_command(input, imgFile, BPBstruct, current_working_dir);
+    input.arg1 = tmp_arg1;
+
+    auto* fat_entries_p = find_entries(current_dir_cluster_no, imgFile, BPBstruct);
+    auto& fat_entries = *fat_entries_p;
+
+    
+    int size_of_fatFileEntry = sizeof(FatFileEntry);
+    FatFileEntry tmp_file;
+    bool is_lfn = false;
+    for (int i = 0; i < fat_entries.size(); i++) {
+        for (int j = 0; j < bytes_per_cluster; j+=size_of_fatFileEntry) {
+            fread(&tmp_file, size_of_fatFileEntry, 1, imgFile);
+            if (tmp_file.lfn.attributes == 15) {
+                is_lfn = true;
+            }
+            else {
+                if (is_lfn) is_lfn = false;
+                else { // We found the empty space for our file.
+                
+                }
+            }
+        }
+    }
 
 }
 
