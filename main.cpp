@@ -31,7 +31,7 @@ vector<FatFileEntry> get_fatFileEntries_in_cluster(uint32_t cluster_no, FILE*& i
     return FatFileEntries;
 }
 
-bool is_path_valid (vector<string>& path, FILE*& imgFile, BPB_struct& BPBstruct) {
+bool is_path_valid (vector<string>& path, FILE*& imgFile, BPB_struct& BPBstruct, bool is_file = false) {
     if (path.empty()) return false;
 
     uint32_t nextCluster = BPBstruct.extended.RootCluster;
@@ -40,15 +40,17 @@ bool is_path_valid (vector<string>& path, FILE*& imgFile, BPB_struct& BPBstruct)
         auto& root_fat_entries = *root_fat_entries_p;
         bool is_folder_found = false;
         string FatFileEntryName;
+        bool is_deleted = false;
         for (unsigned int root_fat_entrie : root_fat_entries) {
             auto FatFileEntries = get_fatFileEntries_in_cluster(root_fat_entrie, imgFile, BPBstruct);
             for (auto & FatFileEntrie : FatFileEntries) {
                 if (FatFileEntrie.lfn.attributes == 15) {
                     FatFileEntry* tmp = &FatFileEntrie;
                     FatFileEntryName.insert(0, lfn_name_extract(tmp));
+                    if (FatFileEntrie.lfn.sequence_number == 0xE5) is_deleted = true;
                 }
                 else {
-                    if ((FatFileEntrie.msdos.attributes & 0x10) == 0x10 && path[i+1] == FatFileEntryName) {
+                    if (!is_deleted && (FatFileEntrie.msdos.attributes & 0x10) == 0x10 && path[i+1] == FatFileEntryName) {
                         is_folder_found = true;
                         nextCluster = FatFileEntrie.msdos.firstCluster;
                     }
@@ -177,7 +179,6 @@ vector<uint32_t>* find_entries (uint32_t& first_cluster, FILE*& imgFile, BPB_str
 }
 
 void cd_command (parsed_input& input, FILE*& imgFile, BPB_struct& BPBstruct, string& current_working_dir) {
-    // TODO: Handle deleted directories
     if (input.arg1 == nullptr) {
         return;
     }
@@ -186,9 +187,7 @@ void cd_command (parsed_input& input, FILE*& imgFile, BPB_struct& BPBstruct, str
 }
 
 void ls_command (parsed_input& input, FILE*& imgFile, BPB_struct& BPBstruct, string& current_working_dir) {
-    // TODO: Handle deleted directories and files.
     // TODO: Should LS handle this: ls -l dir2file.c or ls file.c ? Right now, this is not printing anything.
-    // TODO: Print last modified date and time. (DONE)
     string arg1 = input.arg1 != nullptr ? input.arg1 : "";
     string arg2 = input.arg2 != nullptr ? input.arg2 : "";
     string backup_current_working_dir = current_working_dir;
@@ -235,6 +234,7 @@ void ls_command (parsed_input& input, FILE*& imgFile, BPB_struct& BPBstruct, str
     auto& root_fat_entries = *root_fat_entries_p;
     int print_counter = 0;
     string str1; // TODO: MAYBE SHOULD MOVE THIS TO A LEVEL UP OUTSIDE THIS FOR LOOP. (DONE)
+    bool is_deleted = false;
     for (auto& root_fat_entry : root_fat_entries) {
         fseek(imgFile, beginning_of_clusters + (root_fat_entry-2)*bytes_per_cluster, SEEK_SET);
         int size_of_fatFileEntry = sizeof(FatFileEntry);
@@ -243,9 +243,16 @@ void ls_command (parsed_input& input, FILE*& imgFile, BPB_struct& BPBstruct, str
             fread(tmp_file, size_of_fatFileEntry, 1, imgFile);
             if (tmp_file->lfn.attributes == 15) { // It is LFN.
                 str1.insert(0, lfn_name_extract(tmp_file));
+                if (tmp_file->lfn.sequence_number == 0xE5) {
+                    is_deleted = true;
+                }
             }
             else {
-                if (str1.length() > 0) {
+                if (is_deleted) {
+                    str1.clear();
+                    is_deleted = false;
+                }
+                else if (str1.length() > 0) {
                     if (arg1 == "-l") {
                         uint8_t hours = (tmp_file->msdos.modifiedTime & 0xf800) >> 11;
                         uint8_t minutes = (tmp_file->msdos.modifiedTime & 0x7e0) >> 5;
@@ -283,6 +290,25 @@ void ls_command (parsed_input& input, FILE*& imgFile, BPB_struct& BPBstruct, str
         cd_command(input, imgFile, BPBstruct, current_working_dir);
         input.arg1 = tmp_arg1;
     }
+}
+
+void cat_command(parsed_input& input, FILE*& imgFile, BPB_struct& BPBstruct, string& current_working_dir) {
+    if (input.arg1 == nullptr) return;
+    string path(input.arg1);
+
+    vector<string> result;
+    split_path(result, path, current_working_dir);
+    if (result.empty()) {
+        return;
+    }
+
+    vector<string> clean_result;
+    clean_path(clean_result, result);
+
+    if (!is_path_valid(clean_result, imgFile, BPBstruct, true)) {
+        return;
+    }
+
 }
 
 int main(int argc, char *argv[]) {
@@ -335,6 +361,9 @@ int main(int argc, char *argv[]) {
         }
         else if (input->type == CD) {
             cd_command(*input, imgFile, *BPBstruct, current_working_dir);
+        }
+        else if (input->type == CAT) {
+            cat_command(*input, imgFile, *BPBstruct, current_working_dir);
         }
 
         clean_input(input);
