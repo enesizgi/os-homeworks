@@ -54,6 +54,7 @@ bool is_path_valid (vector<string>& path, FILE*& imgFile, BPB_struct& BPBstruct,
                         is_folder_found = true;
                         nextCluster = FatFileEntrie.msdos.firstCluster;
                     }
+                    is_deleted = false;
                     FatFileEntryName.clear();
                 }
             }
