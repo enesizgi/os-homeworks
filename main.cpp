@@ -233,8 +233,6 @@ void ls_command (parsed_input& input, FILE*& imgFile, BPB_struct& BPBstruct, str
 
     auto* root_fat_entries_p = find_entries(current_dir_cluster_no, imgFile, BPBstruct);
     auto& root_fat_entries = *root_fat_entries_p;
-//    auto bytes_per_cluster = BPBstruct.BytesPerSector*BPBstruct.SectorsPerCluster;
-//    auto beginning_of_clusters = (BPBstruct.ReservedSectorCount+BPBstruct.extended.FATSize*BPBstruct.NumFATs)*BPBstruct.BytesPerSector;
     int print_counter = 0;
     string str1; // TODO: MAYBE SHOULD MOVE THIS TO A LEVEL UP OUTSIDE THIS FOR LOOP. (DONE)
     for (auto& root_fat_entry : root_fat_entries) {
