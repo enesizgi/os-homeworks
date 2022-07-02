@@ -190,6 +190,21 @@ vector<uint32_t>* find_entries (uint32_t& first_cluster, FILE*& imgFile, BPB_str
     return fat_entries_p;
 }
 
+uint32_t find_last_entry_no (uint32_t& first_cluster, FILE*& imgFile, BPB_struct& BPBstruct) {
+    fseek(imgFile, beginning_of_fat_table+8+(first_cluster - BPBstruct.extended.RootCluster)*4, SEEK_SET);
+    uint32_t last_entry_no = first_cluster;
+    uint32_t tmp_entry; // TODO: NEED TO TEST WITH CHAIN FOLDERS. THIS IS PROBABLY WRONG BECAUSE OF LITTLE ENDIAN. SHOULD USE GET_FAT_ENTRY
+    while (true) {
+        fread(&tmp_entry, sizeof(uint32_t), 1, imgFile);
+        if (tmp_entry == end_of_chain) break;
+        else {
+            last_entry_no = tmp_entry;
+            fseek(imgFile, beginning_of_fat_table+4*tmp_entry, SEEK_SET);
+        }
+    }
+    return last_entry_no;
+}
+
 uint32_t find_free_entry (FILE*& imgFile, BPB_struct& BPBstruct) {
     fseek(imgFile, beginning_of_fat_table+8, SEEK_SET);
     uint32_t cluster_no = BPBstruct.extended.RootCluster;
@@ -240,7 +255,9 @@ vector<FatFileEntry> create_lfns (string& filename) {
     const auto* chr_filename = reinterpret_cast<const unsigned char *>(filename.c_str());
     auto checksum = lfn_checksum(chr_filename);
 
+    uint8_t seq_number = 0;
     while (!tmp_string.empty()) {
+        seq_number++;
         FatFileEntry lfn;
         lfn.lfn.attributes = 15;
         lfn.lfn.firstCluster = 0;
@@ -255,10 +272,10 @@ vector<FatFileEntry> create_lfns (string& filename) {
         for (int i = 0; i < 2; i++) {
             lfn.lfn.name3[i] = 65535;
         }
-        // TODO: lfn.lfn.sequence_number
         for (int i = 0; i < 5; i++) {
             if (tmp_string.empty()) {
                 lfn.lfn.name1[i] = 0;
+                lfn.lfn.sequence_number = 0x40 + seq_number;
                 lfns.push_back(lfn);
                 return lfns;
             }
@@ -269,6 +286,7 @@ vector<FatFileEntry> create_lfns (string& filename) {
         for (int i = 0; i < 6; i++) {
             if (tmp_string.empty()) {
                 lfn.lfn.name2[i] = 0;
+                lfn.lfn.sequence_number = 0x40 + seq_number;
                 lfns.push_back(lfn);
                 return lfns;
             }
@@ -279,22 +297,24 @@ vector<FatFileEntry> create_lfns (string& filename) {
         for (int i = 0; i < 2; i++) {
             if (tmp_string.empty()) {
                 lfn.lfn.name3[i] = 0;
+                lfn.lfn.sequence_number = 0x40 + seq_number;
                 lfns.push_back(lfn);
                 return lfns;
             }
             lfn.lfn.name3[i] = *tmp_string.substr(0,1).c_str();
             tmp_string.erase(0,1);
         }
-
+        lfn.lfn.sequence_number = seq_number;
         lfns.push_back(lfn);
     }
     return lfns;
 }
 
-FatFileEntry create_msdos (FatFileEntry& previous_msdos) {
+FatFileEntry create_msdos (FatFileEntry& previous_msdos, bool is_file = true, uint16_t free_entry = 0) {
     FatFileEntry f;
-    f.msdos.firstCluster = f.msdos.fileSize = f.msdos.eaIndex = f.msdos.creationTimeMs = f.msdos.reserved = 0;
-    f.msdos.attributes = 32;
+    f.msdos.firstCluster = is_file ? 0 : free_entry;
+    f.msdos.fileSize = f.msdos.eaIndex = f.msdos.creationTimeMs = f.msdos.reserved = 0;
+    f.msdos.attributes = is_file ? 32 : 16;
 
     modify_time(f);
 
@@ -387,7 +407,8 @@ void ls_command (parsed_input& input, FILE*& imgFile, BPB_struct& BPBstruct, str
         auto* tmp_file = new FatFileEntry; // TODO: Change this to stack allocation.
         for (int j = 0; j < bytes_per_cluster; j+=size_of_fatFileEntry) {
             fread(tmp_file, size_of_fatFileEntry, 1, imgFile);
-            if (tmp_file->lfn.attributes == 15) { // It is LFN.
+            if (tmp_file->msdos.filename[0] == 0x2E) continue;
+            else if (tmp_file->lfn.attributes == 15) { // It is LFN.
                 str1.insert(0, lfn_name_extract(tmp_file));
                 if (tmp_file->lfn.sequence_number == 0xE5) {
                     is_deleted = true;
@@ -511,7 +532,8 @@ void touch_command(parsed_input& input, FILE*& imgFile, BPB_struct& BPBstruct, s
         for (int j = 0; j < bytes_per_cluster; j+=size_of_fatFileEntry) {
             if (file_entries.empty()) break;
             fread(&tmp_file, size_of_fatFileEntry, 1, imgFile);
-            if (tmp_file.lfn.attributes == 15) {
+            if (tmp_file.msdos.filename[0] == 0x2E) continue;
+            else if (tmp_file.lfn.attributes == 15) {
                 is_lfn = true;
             }
             else {
@@ -523,7 +545,7 @@ void touch_command(parsed_input& input, FILE*& imgFile, BPB_struct& BPBstruct, s
                     fseek(imgFile, -size_of_fatFileEntry, SEEK_CUR);
                     msdos = create_msdos(previous_msdos);
                     file_entries.insert(file_entries.begin(), msdos);
-                    for (int k = 0; k < (bytes_per_cluster - j) / size_of_fatFileEntry; i++) {
+                    for (int k = 0; k < (bytes_per_cluster - j) / size_of_fatFileEntry; k++) {
                         if (file_entries.empty()) break;
                         fwrite(&file_entries.back(), size_of_fatFileEntry, 1, imgFile);
                         file_entries.pop_back();
@@ -546,6 +568,125 @@ void touch_command(parsed_input& input, FILE*& imgFile, BPB_struct& BPBstruct, s
 
     cd_command(backup_current_working_dir, imgFile, BPBstruct, current_working_dir);
 
+}
+
+FatFileEntry create_dot_entry(uint16_t first_cluster) {
+    FatFileEntry f;
+    f.msdos.firstCluster = first_cluster;
+    f.msdos.fileSize = f.msdos.eaIndex = f.msdos.creationTimeMs = f.msdos.reserved = 0;
+    f.msdos.attributes = 16;
+
+    modify_time(f);
+
+    for (unsigned char & i : f.msdos.extension) i = 32;
+
+    f.msdos.filename[0] = 0x2E;
+    for (int i = 1; i < 8; i++) {
+        f.msdos.filename[i] = 32;
+    }
+
+    return f;
+}
+
+FatFileEntry create_double_dot_entry(uint16_t first_cluster) {
+    FatFileEntry f;
+    f.msdos.firstCluster = first_cluster;
+    f.msdos.fileSize = f.msdos.eaIndex = f.msdos.creationTimeMs = f.msdos.reserved = 0;
+    f.msdos.attributes = 16;
+
+    modify_time(f);
+
+    for (unsigned char & i : f.msdos.extension) i = 32;
+
+    f.msdos.filename[0] = 0x2E;
+    f.msdos.filename[1] = 0x2E;
+    for (int i = 2; i < 8; i++) {
+        f.msdos.filename[i] = 32;
+    }
+
+    return f;
+}
+
+void mkdir_command(parsed_input& input, FILE*& imgFile, BPB_struct& BPBstruct, string& current_working_dir) {
+    if (input.arg1 == nullptr) return;
+    string path(input.arg1);
+
+    vector<string> result;
+    split_path(result, path, current_working_dir);
+    if (result.empty()) {
+        return;
+    }
+
+    vector<string> clean_result;
+    clean_path(clean_result, result);
+
+    if (is_path_valid(clean_result, imgFile, BPBstruct)) return; // Checks if directory exists, it shouldn't
+
+    uint32_t last_entry_no = find_last_entry_no(current_dir_cluster_no, imgFile, BPBstruct);
+    fseek(imgFile, beginning_of_clusters + (last_entry_no - BPBstruct.extended.RootCluster) * bytes_per_cluster, SEEK_SET);
+
+    int size_of_fatFileEntry = sizeof(FatFileEntry);
+    FatFileEntry tmp_file;
+    bool is_lfn = false;
+
+    string filename(input.arg1);
+    vector<FatFileEntry> file_entries = create_lfns(filename);
+    if (file_entries.empty()) return;
+
+    FatFileEntry msdos;
+    FatFileEntry previous_msdos;
+    for (int i = 0; i < 8; i++) // TODO: For . and .. entries. It could be unnecessary in touch. Check this in mkdir.
+        previous_msdos.msdos.filename[i] = 32;
+
+    // TODO: Should we check for deleted files?
+
+    uint32_t free_entry = find_free_entry(imgFile, BPBstruct);
+
+    for (int j = 0; j < bytes_per_cluster; j+=size_of_fatFileEntry) {
+        if (file_entries.empty()) break;
+        fread(&tmp_file, size_of_fatFileEntry, 1, imgFile);
+        if (tmp_file.msdos.filename[0] == 0x2E) continue;
+        else if (tmp_file.lfn.attributes == 15) {
+            is_lfn = true;
+        }
+        else {
+            if (is_lfn) {
+                is_lfn = false;
+                previous_msdos = tmp_file;
+            }
+            else { // We found the empty space for our file.
+                fseek(imgFile, -size_of_fatFileEntry, SEEK_CUR);
+                msdos = create_msdos(previous_msdos, false, free_entry);
+                file_entries.insert(file_entries.begin(), msdos);
+                for (int k = 0; k < (bytes_per_cluster - j) / size_of_fatFileEntry; k++) {
+                    if (file_entries.empty()) break;
+                    fwrite(&file_entries.back(), size_of_fatFileEntry, 1, imgFile);
+                    file_entries.pop_back();
+                }
+            }
+        }
+    }
+
+    while (!file_entries.empty()) {
+        uint32_t new_cluster_no = add_free_entry(current_dir_cluster_no, imgFile, BPBstruct);
+
+        fseek(imgFile, beginning_of_clusters + (new_cluster_no - BPBstruct.extended.RootCluster) * bytes_per_cluster, SEEK_SET);
+        for (int j = 0; j < bytes_per_cluster; j+=size_of_fatFileEntry) {
+            if (file_entries.empty()) break;
+            fwrite(&file_entries.back(), size_of_fatFileEntry, 1, imgFile);
+            file_entries.pop_back();
+        }
+    }
+
+    // TODO: There is a bug here which corrupts the FAT Table. I didn't quite understand it. Fseek not going to location.
+    fseek(imgFile, beginning_of_clusters + (free_entry - BPBstruct.extended.RootCluster) * bytes_per_cluster, SEEK_SET);
+    FatFileEntry dot_entry = create_dot_entry(free_entry);
+    FatFileEntry double_dot_entry = create_double_dot_entry(current_dir_cluster_no);
+    fwrite(&dot_entry, 4, 1, imgFile);
+    fwrite(&double_dot_entry, 4, 1, imgFile);
+
+    fseek(imgFile, beginning_of_fat_table+8+(free_entry - BPBstruct.extended.RootCluster)*4, SEEK_SET);
+    fwrite(&end_of_chain, 4, 1, imgFile);
 }
 
 int main(int argc, char *argv[]) {
@@ -607,6 +748,9 @@ int main(int argc, char *argv[]) {
         }
         else if (input.type == TOUCH) {
             touch_command(input, imgFile, BPBstruct, current_working_dir);
+        }
+        else if (input.type == MKDIR) {
+            mkdir_command(input, imgFile, BPBstruct, current_working_dir);
         }
 
         clean_input(&input);
