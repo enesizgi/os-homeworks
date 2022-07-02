@@ -50,7 +50,9 @@ void parse(parsed_input* inp, char *line) {
     }
 }
 void clean_input(parsed_input* inp) {
-    free(inp->arg1);
+    if ( inp->arg1 ) {
+        free(inp->arg1);
+    }
     if ( inp->arg2 )
         free(inp->arg2);
 }

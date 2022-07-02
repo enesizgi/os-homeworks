@@ -1,6 +1,7 @@
 #include <iostream>
 #include <string>
 #include <vector>
+#include <ctime>
 #include "fat32.h"
 #include "parser.h"
 
@@ -189,11 +190,148 @@ vector<uint32_t>* find_entries (uint32_t& first_cluster, FILE*& imgFile, BPB_str
     return fat_entries_p;
 }
 
-void cd_command (parsed_input& input, FILE*& imgFile, BPB_struct& BPBstruct, string& current_working_dir) {
-    if (input.arg1 == nullptr) {
-        return;
+uint32_t find_free_entry (FILE*& imgFile, BPB_struct& BPBstruct) {
+    fseek(imgFile, beginning_of_fat_table+8, SEEK_SET);
+    uint32_t cluster_no = BPBstruct.extended.RootCluster;
+    while (true) {
+        uint32_t entry = get_fat_entry(imgFile);
+        if (entry == 0) return cluster_no;
+        cluster_no++;
     }
-    string path(input.arg1);
+}
+
+uint32_t add_free_entry (uint32_t& first_cluster, FILE*& imgFile, BPB_struct& BPBstruct) {
+    auto* root_fat_entries_p = find_entries(first_cluster, imgFile, BPBstruct);
+    auto& root_fat_entries = *root_fat_entries_p;
+
+    uint32_t tmp_cluster_no = root_fat_entries.back();
+    fseek(imgFile, beginning_of_fat_table+8+(root_fat_entries.back() - BPBstruct.extended.RootCluster)*4, SEEK_SET);
+    uint32_t new_cluster_no = find_free_entry(imgFile, BPBstruct);
+    fwrite(&new_cluster_no, 4, 1, imgFile);
+
+    fseek(imgFile, beginning_of_fat_table+8+(new_cluster_no - BPBstruct.extended.RootCluster)*4, SEEK_SET);
+    fwrite(&end_of_chain, 4, 1, imgFile);
+
+    return new_cluster_no;
+}
+
+void modify_time(FatFileEntry& msdos) {
+   time_t now = time(nullptr);
+   tm *ltm = localtime(&now);
+
+   msdos.msdos.creationTime = msdos.msdos.modifiedTime = (ltm->tm_hour << 11) + (ltm->tm_min << 5);
+   msdos.msdos.creationDate = msdos.msdos.modifiedDate = msdos.msdos.lastAccessTime = (ltm->tm_mon << 5) + ltm->tm_mday;
+}
+
+unsigned char lfn_checksum(const unsigned char *pFCBName)
+{
+   int i;
+   unsigned char sum = 0;
+
+   for (i = 11; i; i--)
+      sum = ((sum & 1) << 7) + (sum >> 1) + *pFCBName++;
+
+   return sum;
+}
+
+vector<FatFileEntry> create_lfns (string& filename) {
+    string tmp_string(filename);
+    vector<FatFileEntry> lfns;
+    const auto* chr_filename = reinterpret_cast<const unsigned char *>(filename.c_str());
+    auto checksum = lfn_checksum(chr_filename);
+
+    while (!tmp_string.empty()) {
+        FatFileEntry lfn;
+        lfn.lfn.attributes = 15;
+        lfn.lfn.firstCluster = 0;
+        lfn.lfn.reserved = 0;
+        lfn.lfn.checksum = checksum;
+        for (int i = 0; i < 5; i++) {
+            lfn.lfn.name1[i] = 65535;
+        }
+        for (int i = 0; i < 6; i++) {
+            lfn.lfn.name2[i] = 65535;
+        }
+        for (int i = 0; i < 2; i++) {
+            lfn.lfn.name3[i] = 65535;
+        }
+        // TODO: lfn.lfn.sequence_number
+        for (int i = 0; i < 5; i++) {
+            if (tmp_string.empty()) {
+                lfn.lfn.name1[i] = 0;
+                lfns.push_back(lfn);
+                return lfns;
+            }
+            lfn.lfn.name1[i] = *tmp_string.substr(0,1).c_str();
+            tmp_string.erase(0,1);
+        }
+
+        for (int i = 0; i < 6; i++) {
+            if (tmp_string.empty()) {
+                lfn.lfn.name2[i] = 0;
+                lfns.push_back(lfn);
+                return lfns;
+            }
+            lfn.lfn.name2[i] = *tmp_string.substr(0,1).c_str();
+            tmp_string.erase(0,1);
+        }
+
+        for (int i = 0; i < 2; i++) {
+            if (tmp_string.empty()) {
+                lfn.lfn.name3[i] = 0;
+                lfns.push_back(lfn);
+                return lfns;
+            }
+            lfn.lfn.name3[i] = *tmp_string.substr(0,1).c_str();
+            tmp_string.erase(0,1);
+        }
+
+        lfns.push_back(lfn);
+    }
+    return lfns;
+}
+
+FatFileEntry create_msdos (FatFileEntry& previous_msdos) {
+    FatFileEntry f;
+    f.msdos.firstCluster = f.msdos.fileSize = f.msdos.eaIndex = f.msdos.creationTimeMs = f.msdos.reserved = 0;
+    f.msdos.attributes = 32;
+
+    modify_time(f);
+
+    for (unsigned char & i : f.msdos.extension) i = 32;
+
+    f.msdos.filename[0] = 126;
+    for (int i = 1; i < 8; i++) {
+        f.msdos.filename[i] = 32;
+    }
+
+    uint8_t index = 0;
+    string index_str;
+    for (int i = 1; i < 8; i++) {
+        if (previous_msdos.msdos.filename[i] == 32) break;
+        else {
+            char tmp_char = previous_msdos.msdos.filename[i];
+            string tmp_string;
+            tmp_string.push_back(tmp_char);
+            index_str.append(tmp_string);
+        }
+    }
+
+    index = index_str.empty() ? 0 : stoul(index_str, nullptr);
+    index++;
+    index_str = to_string(index);
+    int size = index_str.size();
+    for (int i = 1; i < 8; i++) {
+        if (index_str.empty()) break;
+        f.msdos.filename[i] = *index_str.substr(0,1).c_str();
+        index_str.erase(0,1);
+    }
+
+    return f;
+}
+
+void cd_command (string& path, FILE*& imgFile, BPB_struct& BPBstruct, string& current_working_dir) {
+    if (path.empty()) return;
     current_working_dir = resolve_path(path, current_working_dir, imgFile, BPBstruct);
 }
 
@@ -217,7 +355,7 @@ void ls_command (parsed_input& input, FILE*& imgFile, BPB_struct& BPBstruct, str
         if (!is_path_valid(clean_result, imgFile, BPBstruct)) {
             return;
         }
-        cd_command(input, imgFile, BPBstruct, current_working_dir);
+        cd_command(arg1, imgFile, BPBstruct, current_working_dir);
         is_cd_used = true;
     }
     else if (arg1 == "-l" && !arg2.empty()) {
@@ -234,11 +372,8 @@ void ls_command (parsed_input& input, FILE*& imgFile, BPB_struct& BPBstruct, str
             return;
         }
 
-        auto tmp_arg1 = input.arg1;
-        input.arg1 = input.arg2;
-        cd_command(input, imgFile, BPBstruct, current_working_dir);
+        cd_command(arg2, imgFile, BPBstruct, current_working_dir);
         is_cd_used = true;
-        input.arg1 = tmp_arg1;
     }
 
     auto* root_fat_entries_p = find_entries(current_dir_cluster_no, imgFile, BPBstruct);
@@ -296,10 +431,7 @@ void ls_command (parsed_input& input, FILE*& imgFile, BPB_struct& BPBstruct, str
     delete root_fat_entries_p;
 
     if (is_cd_used) {
-        auto tmp_arg1 = input.arg1;
-        input.arg1 = const_cast<char*>(backup_current_working_dir.c_str());
-        cd_command(input, imgFile, BPBstruct, current_working_dir);
-        input.arg1 = tmp_arg1;
+        cd_command(backup_current_working_dir, imgFile, BPBstruct, current_working_dir);
     }
 }
 
@@ -356,9 +488,7 @@ void touch_command(parsed_input& input, FILE*& imgFile, BPB_struct& BPBstruct, s
     auto tmp_arg1 = input.arg1;
     string cd_directory;
     concat_string(cd_directory, clean_result);
-    input.arg1 = const_cast<char*>(cd_directory.c_str());
-    cd_command(input, imgFile, BPBstruct, current_working_dir);
-    input.arg1 = tmp_arg1;
+    cd_command(cd_directory, imgFile, BPBstruct, current_working_dir);
 
     auto* fat_entries_p = find_entries(current_dir_cluster_no, imgFile, BPBstruct);
     auto& fat_entries = *fat_entries_p;
@@ -367,20 +497,54 @@ void touch_command(parsed_input& input, FILE*& imgFile, BPB_struct& BPBstruct, s
     int size_of_fatFileEntry = sizeof(FatFileEntry);
     FatFileEntry tmp_file;
     bool is_lfn = false;
+
+    vector<FatFileEntry> file_entries = create_lfns(filename);
+    FatFileEntry msdos;
+    FatFileEntry previous_msdos;
+    for (int i = 0; i < 8; i++) // TODO: For . and .. entries. It could be unnecessary in touch. Check this in mkdir.
+        previous_msdos.msdos.filename[i] = 32;
+
+    // TODO: Should we check for deleted files?
     for (int i = 0; i < fat_entries.size(); i++) {
+        if (file_entries.empty()) break;
+        fseek(imgFile, beginning_of_clusters + (fat_entries[i] - BPBstruct.extended.RootCluster) * bytes_per_cluster, SEEK_SET);
         for (int j = 0; j < bytes_per_cluster; j+=size_of_fatFileEntry) {
+            if (file_entries.empty()) break;
             fread(&tmp_file, size_of_fatFileEntry, 1, imgFile);
             if (tmp_file.lfn.attributes == 15) {
                 is_lfn = true;
             }
             else {
-                if (is_lfn) is_lfn = false;
+                if (is_lfn) {
+                    is_lfn = false;
+                    previous_msdos = tmp_file;
+                }
                 else { // We found the empty space for our file.
-                
+                    fseek(imgFile, -size_of_fatFileEntry, SEEK_CUR);
+                    msdos = create_msdos(previous_msdos);
+                    file_entries.insert(file_entries.begin(), msdos);
+                    for (int k = 0; k < (bytes_per_cluster - j) / size_of_fatFileEntry; i++) {
+                        if (file_entries.empty()) break;
+                        fwrite(&file_entries.back(), size_of_fatFileEntry, 1, imgFile);
+                        file_entries.pop_back();
+                    }
                 }
             }
         }
     }
+
+    while (!file_entries.empty()) {
+        uint32_t new_cluster_no = add_free_entry(current_dir_cluster_no, imgFile, BPBstruct);
+
+        fseek(imgFile, beginning_of_clusters + (new_cluster_no - BPBstruct.extended.RootCluster) * bytes_per_cluster, SEEK_SET);
+        for (int j = 0; j < bytes_per_cluster; j+=size_of_fatFileEntry) {
+            if (file_entries.empty()) break;
+            fwrite(&file_entries.back(), size_of_fatFileEntry, 1, imgFile);
+            file_entries.pop_back();
+        }
+    }
+
+    cd_command(backup_current_working_dir, imgFile, BPBstruct, current_working_dir);
 
 }
 
@@ -433,7 +597,10 @@ int main(int argc, char *argv[]) {
             ls_command(input, imgFile, BPBstruct, current_working_dir);
         }
         else if (input.type == CD) {
-            cd_command(input, imgFile, BPBstruct, current_working_dir);
+            if (input.arg1 != nullptr) {
+                string path(input.arg1);
+                cd_command(path, imgFile, BPBstruct, current_working_dir);
+            }
         }
         else if (input.type == CAT) {
             cat_command(input, imgFile, BPBstruct, current_working_dir);
