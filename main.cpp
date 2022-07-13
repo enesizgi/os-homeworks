@@ -2,6 +2,7 @@
 #include <string>
 #include <vector>
 #include <ctime>
+#include <algorithm>
 #include "fat32.h"
 #include "parser.h"
 
@@ -13,7 +14,7 @@ uint32_t bytes_per_cluster;
 uint16_t beginning_of_fat_table;
 uint32_t end_of_chain;
 
-string months_str[] = {"January", "February", "March", "April", "May", "June","July","August","September","October","November","December"};
+string months_str[] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun","Jul","Aug","Sep","Oct","Nov","Dec"};
 
 uint32_t get_fat_entry_at (FILE*& imgFile, uint32_t location);
 vector<uint32_t>* find_entries (uint32_t& first_cluster, FILE*& imgFile, BPB_struct& BPBstruct);
@@ -210,7 +211,13 @@ uint32_t find_free_entry (FILE*& imgFile, BPB_struct& BPBstruct) {
     uint32_t cluster_no = BPBstruct.extended.RootCluster;
     while (true) {
         uint32_t entry = get_fat_entry(imgFile);
-        if (entry == 0) return cluster_no;
+        if (entry == 0) {
+            fseek(imgFile, -4, SEEK_CUR);
+            fwrite(&end_of_chain, 4, 1, imgFile);
+            fseek(imgFile, beginning_of_fat_table+BPBstruct.extended.FATSize*BPBstruct.BytesPerSector + 8+(cluster_no - BPBstruct.extended.RootCluster)*4, SEEK_SET);
+            fwrite(&end_of_chain, 4, 1, imgFile);
+            return cluster_no;
+        };
         cluster_no++;
     }
 }
@@ -231,22 +238,22 @@ uint32_t add_free_entry (uint32_t& first_cluster, FILE*& imgFile, BPB_struct& BP
 }
 
 void modify_time(FatFileEntry& msdos) {
-   time_t now = time(nullptr);
-   tm *ltm = localtime(&now);
+    time_t now = time(nullptr);
+    tm *ltm = localtime(&now);
 
-   msdos.msdos.creationTime = msdos.msdos.modifiedTime = (ltm->tm_hour << 11) + (ltm->tm_min << 5);
-   msdos.msdos.creationDate = msdos.msdos.modifiedDate = msdos.msdos.lastAccessTime = (ltm->tm_mon << 5) + ltm->tm_mday;
+    msdos.msdos.creationTime = msdos.msdos.modifiedTime = (ltm->tm_hour << 11) + (ltm->tm_min << 5);
+    msdos.msdos.creationDate = msdos.msdos.modifiedDate = msdos.msdos.lastAccessTime = ((ltm->tm_year - 80) << 9) + (ltm->tm_mon << 5) + ltm->tm_mday;
 }
 
 unsigned char lfn_checksum(const unsigned char *pFCBName)
 {
-   int i;
-   unsigned char sum = 0;
+    int i;
+    unsigned char sum = 0;
 
-   for (i = 11; i; i--)
-      sum = ((sum & 1) << 7) + (sum >> 1) + *pFCBName++;
+    for (i = 11; i; i--)
+        sum = ((sum & 1) << 7) + (sum >> 1) + *pFCBName++;
 
-   return sum;
+    return sum;
 }
 
 vector<FatFileEntry> create_lfns (string& filename) {
@@ -355,25 +362,26 @@ void cd_command (string& path, FILE*& imgFile, BPB_struct& BPBstruct, string& cu
     current_working_dir = resolve_path(path, current_working_dir, imgFile, BPBstruct);
 }
 
-void ls_command (parsed_input& input, FILE*& imgFile, BPB_struct& BPBstruct, string& current_working_dir) {
+auto ls_command (parsed_input& input, FILE*& imgFile, BPB_struct& BPBstruct, string& current_working_dir) {
     // TODO: Should LS handle this: ls -l dir2file.c or ls file.c ? Right now, this is not printing anything.
     string arg1 = input.arg1 != nullptr ? input.arg1 : "";
     string arg2 = input.arg2 != nullptr ? input.arg2 : "";
     string backup_current_working_dir = current_working_dir;
     bool is_cd_used = false;
+    vector<pair<string, vector<FatFileEntry> > > entries;
 
     if (!arg1.empty() && arg1 != "-l") {
         vector<string> result;
         split_path(result, arg1, current_working_dir);
         if (result.empty()) {
-            return;
+            return entries;
         }
 
         vector<string> clean_result;
         clean_path(clean_result, result);
 
         if (!is_path_valid(clean_result, imgFile, BPBstruct)) {
-            return;
+            return entries;
         }
         cd_command(arg1, imgFile, BPBstruct, current_working_dir);
         is_cd_used = true;
@@ -382,14 +390,14 @@ void ls_command (parsed_input& input, FILE*& imgFile, BPB_struct& BPBstruct, str
         vector<string> result;
         split_path(result, arg2, current_working_dir);
         if (result.empty()) {
-            return;
+            return entries;
         }
 
         vector<string> clean_result;
         clean_path(clean_result, result);
 
         if (!is_path_valid(clean_result, imgFile, BPBstruct)) {
-            return;
+            return entries;
         }
 
         cd_command(arg2, imgFile, BPBstruct, current_working_dir);
@@ -401,6 +409,8 @@ void ls_command (parsed_input& input, FILE*& imgFile, BPB_struct& BPBstruct, str
     int print_counter = 0;
     string str1; // TODO: MAYBE SHOULD MOVE THIS TO A LEVEL UP OUTSIDE THIS FOR LOOP. (DONE)
     bool is_deleted = false;
+
+    pair<string, vector<FatFileEntry> > entry;
     for (auto& root_fat_entry : root_fat_entries) {
         fseek(imgFile, beginning_of_clusters + (root_fat_entry - BPBstruct.extended.RootCluster)*bytes_per_cluster, SEEK_SET); // TODO: CHECK IF ROOTCLUSTER EDIT WORKS
         int size_of_fatFileEntry = sizeof(FatFileEntry);
@@ -409,6 +419,7 @@ void ls_command (parsed_input& input, FILE*& imgFile, BPB_struct& BPBstruct, str
             fread(tmp_file, size_of_fatFileEntry, 1, imgFile);
             if (tmp_file->msdos.filename[0] == 0x2E) continue;
             else if (tmp_file->lfn.attributes == 15) { // It is LFN.
+                entry.second.push_back(*tmp_file);
                 str1.insert(0, lfn_name_extract(tmp_file));
                 if (tmp_file->lfn.sequence_number == 0xE5) {
                     is_deleted = true;
@@ -418,6 +429,8 @@ void ls_command (parsed_input& input, FILE*& imgFile, BPB_struct& BPBstruct, str
                 if (is_deleted) {
                     str1.clear();
                     is_deleted = false;
+                    entry.first.clear();
+                    entry.second.clear();
                 }
                 else if (str1.length() > 0) {
                     if (arg1 == "-l") {
@@ -440,6 +453,11 @@ void ls_command (parsed_input& input, FILE*& imgFile, BPB_struct& BPBstruct, str
                         if (j != 0 && print_counter != 0) cout << " ";
                         cout << str1;
                     }
+                    entry.first = str1;
+                    entry.second.push_back(*tmp_file);
+                    entries.push_back(entry);
+                    entry.first.clear();
+                    entry.second.clear();
                     print_counter++;
                     str1.clear();
                 }
@@ -454,6 +472,8 @@ void ls_command (parsed_input& input, FILE*& imgFile, BPB_struct& BPBstruct, str
     if (is_cd_used) {
         cd_command(backup_current_working_dir, imgFile, BPBstruct, current_working_dir);
     }
+
+    return entries;
 }
 
 void cat_command(parsed_input& input, FILE*& imgFile, BPB_struct& BPBstruct, string& current_working_dir) {
@@ -482,11 +502,12 @@ void cat_command(parsed_input& input, FILE*& imgFile, BPB_struct& BPBstruct, str
         char content[1024] = {0};
         fseek(imgFile, beginning_of_clusters + (fat_entries[i] - BPBstruct.extended.RootCluster) * bytes_per_cluster, SEEK_SET);
         fread(content, sizeof(content), 1, imgFile);
-        cout << content;
+        for (int j = 0; j < 1024; j++) if (content[j] != 0) cout << content[j];
     }
+    cout << endl;
 }
 
-void touch_command(parsed_input& input, FILE*& imgFile, BPB_struct& BPBstruct, string& current_working_dir) {
+void touch_command(parsed_input& input, FILE*& imgFile, BPB_struct& BPBstruct, string& current_working_dir, vector<FatFileEntry>* ready_file = nullptr) {
     if (input.arg1 == nullptr) return;
     string path(input.arg1);
 
@@ -500,6 +521,7 @@ void touch_command(parsed_input& input, FILE*& imgFile, BPB_struct& BPBstruct, s
     clean_path(clean_result, result);
 
     if (is_path_valid(clean_result, imgFile, BPBstruct, true, nullptr, false)) return; // Checks if file exists, it shouldn't
+    if (is_path_valid(clean_result, imgFile, BPBstruct, false, nullptr, false)) return; // Checks if file exists, it shouldn't
 
     string filename = clean_result.back();
     clean_result.pop_back();
@@ -514,12 +536,12 @@ void touch_command(parsed_input& input, FILE*& imgFile, BPB_struct& BPBstruct, s
     auto* fat_entries_p = find_entries(current_dir_cluster_no, imgFile, BPBstruct);
     auto& fat_entries = *fat_entries_p;
 
-    
+
     int size_of_fatFileEntry = sizeof(FatFileEntry);
     FatFileEntry tmp_file;
     bool is_lfn = false;
 
-    vector<FatFileEntry> file_entries = create_lfns(filename);
+    vector<FatFileEntry> file_entries = ready_file == nullptr ? create_lfns(filename) : *ready_file;
     FatFileEntry msdos;
     FatFileEntry previous_msdos;
     for (int i = 0; i < 8; i++) // TODO: For . and .. entries. It could be unnecessary in touch. Check this in mkdir.
@@ -544,6 +566,16 @@ void touch_command(parsed_input& input, FILE*& imgFile, BPB_struct& BPBstruct, s
                 else { // We found the empty space for our file.
                     fseek(imgFile, -size_of_fatFileEntry, SEEK_CUR);
                     msdos = create_msdos(previous_msdos);
+                    if (ready_file != nullptr) {
+                        uint8_t tmp_filename[8];
+                        for (int k = 0; k < 8; k++)
+                            tmp_filename[k] = msdos.msdos.filename[k];
+                        msdos = file_entries.back();
+                        for (int k = 0; k < 8; k++)
+                            msdos.msdos.filename[k] = tmp_filename[k];
+                        file_entries.pop_back();
+                        std::reverse(file_entries.begin(), file_entries.end());
+                    }
                     file_entries.insert(file_entries.begin(), msdos);
                     for (int k = 0; k < (bytes_per_cluster - j) / size_of_fatFileEntry; k++) {
                         if (file_entries.empty()) break;
@@ -620,48 +652,60 @@ void mkdir_command(parsed_input& input, FILE*& imgFile, BPB_struct& BPBstruct, s
     vector<string> clean_result;
     clean_path(clean_result, result);
 
-    if (is_path_valid(clean_result, imgFile, BPBstruct)) return; // Checks if directory exists, it shouldn't
+    if (is_path_valid(clean_result, imgFile, BPBstruct, true, nullptr, false)) return; // Checks if file exists, it shouldn't
+    if (is_path_valid(clean_result, imgFile, BPBstruct, false, nullptr, false)) return; // Checks if file exists, it shouldn't
 
-    uint32_t last_entry_no = find_last_entry_no(current_dir_cluster_no, imgFile, BPBstruct);
-    fseek(imgFile, beginning_of_clusters + (last_entry_no - BPBstruct.extended.RootCluster) * bytes_per_cluster, SEEK_SET);
+    string filename = clean_result.back();
+    clean_result.pop_back();
+    if (!is_path_valid(clean_result, imgFile, BPBstruct, false, nullptr, false)) return; // Checks if directory exists, it should
+
+    string backup_current_working_dir = current_working_dir;
+    auto tmp_arg1 = input.arg1;
+    string cd_directory;
+    concat_string(cd_directory, clean_result);
+    cd_command(cd_directory, imgFile, BPBstruct, current_working_dir);
+
+    auto* fat_entries_p = find_entries(current_dir_cluster_no, imgFile, BPBstruct);
+    auto& fat_entries = *fat_entries_p;
 
     int size_of_fatFileEntry = sizeof(FatFileEntry);
     FatFileEntry tmp_file;
     bool is_lfn = false;
 
-    string filename(input.arg1);
     vector<FatFileEntry> file_entries = create_lfns(filename);
-    if (file_entries.empty()) return;
-
     FatFileEntry msdos;
     FatFileEntry previous_msdos;
     for (int i = 0; i < 8; i++) // TODO: For . and .. entries. It could be unnecessary in touch. Check this in mkdir.
         previous_msdos.msdos.filename[i] = 32;
 
     // TODO: Should we check for deleted files?
-
-    uint32_t free_entry = find_free_entry(imgFile, BPBstruct);
-
-    for (int j = 0; j < bytes_per_cluster; j+=size_of_fatFileEntry) {
+    uint32_t free_cluster;
+    for (int i = 0; i < fat_entries.size(); i++) {
         if (file_entries.empty()) break;
-        fread(&tmp_file, size_of_fatFileEntry, 1, imgFile);
-        if (tmp_file.msdos.filename[0] == 0x2E) continue;
-        else if (tmp_file.lfn.attributes == 15) {
-            is_lfn = true;
-        }
-        else {
-            if (is_lfn) {
-                is_lfn = false;
-                previous_msdos = tmp_file;
+        fseek(imgFile, beginning_of_clusters + (fat_entries[i] - BPBstruct.extended.RootCluster) * bytes_per_cluster, SEEK_SET);
+        for (int j = 0; j < bytes_per_cluster; j+=size_of_fatFileEntry) {
+            if (file_entries.empty()) break;
+            fread(&tmp_file, size_of_fatFileEntry, 1, imgFile);
+            if (tmp_file.msdos.filename[0] == 0x2E) continue;
+            else if (tmp_file.lfn.attributes == 15) {
+                is_lfn = true;
             }
-            else { // We found the empty space for our file.
-                fseek(imgFile, -size_of_fatFileEntry, SEEK_CUR);
-                msdos = create_msdos(previous_msdos, false, free_entry);
-                file_entries.insert(file_entries.begin(), msdos);
-                for (int k = 0; k < (bytes_per_cluster - j) / size_of_fatFileEntry; k++) {
-                    if (file_entries.empty()) break;
-                    fwrite(&file_entries.back(), size_of_fatFileEntry, 1, imgFile);
-                    file_entries.pop_back();
+            else {
+                if (is_lfn) {
+                    is_lfn = false;
+                    previous_msdos = tmp_file;
+                }
+                else { // We found the empty space for our file.
+                    fseek(imgFile, -size_of_fatFileEntry, SEEK_CUR);
+                    free_cluster = find_free_entry(imgFile, BPBstruct);
+                    msdos = create_msdos(previous_msdos, false, free_cluster);
+                    file_entries.insert(file_entries.begin(), msdos);
+                    fseek(imgFile, beginning_of_clusters + (fat_entries[i] - BPBstruct.extended.RootCluster) * bytes_per_cluster + j, SEEK_SET);
+                    for (int k = 0; k < (bytes_per_cluster - j) / size_of_fatFileEntry; k++) {
+                        if (file_entries.empty()) break;
+                        fwrite(&file_entries.back(), size_of_fatFileEntry, 1, imgFile);
+                        file_entries.pop_back();
+                    }
                 }
             }
         }
@@ -679,19 +723,166 @@ void mkdir_command(parsed_input& input, FILE*& imgFile, BPB_struct& BPBstruct, s
     }
 
     // TODO: There is a bug here which corrupts the FAT Table. I didn't quite understand it. Fseek not going to location.
-    fseek(imgFile, beginning_of_clusters + (free_entry - BPBstruct.extended.RootCluster) * bytes_per_cluster, SEEK_SET);
-    FatFileEntry dot_entry = create_dot_entry(free_entry);
+    fseek(imgFile, beginning_of_clusters + (free_cluster - BPBstruct.extended.RootCluster) * bytes_per_cluster, SEEK_SET);
+    FatFileEntry dot_entry = create_dot_entry(free_cluster);
+    fwrite(&dot_entry, sizeof(dot_entry), 1, imgFile);
     FatFileEntry double_dot_entry = create_double_dot_entry(current_dir_cluster_no);
-    fwrite(&dot_entry, 4, 1, imgFile);
-    fwrite(&double_dot_entry, 4, 1, imgFile);
+    fwrite(&double_dot_entry, sizeof(double_dot_entry), 1, imgFile);
+    cd_command(backup_current_working_dir, imgFile, BPBstruct, current_working_dir);
 
-    fseek(imgFile, beginning_of_fat_table+8+(free_entry - BPBstruct.extended.RootCluster)*4, SEEK_SET);
-    fwrite(&end_of_chain, 4, 1, imgFile);
+}
+
+void mv_command(parsed_input& input, FILE*& imgFile, BPB_struct& BPBstruct, string& current_working_dir) {
+    if (input.arg1 == nullptr || input.arg2 == nullptr) return;
+    string arg1(input.arg1);
+    string arg2(input.arg2);
+
+    vector<string> result_1, result_2;
+    vector<string> clean_result_1, clean_result_2;
+    split_path(result_1, arg1, current_working_dir);
+    split_path(result_2, arg2, current_working_dir);
+
+    if (result_1.empty() || result_2.empty()) return;
+
+    clean_path(clean_result_1, result_1);
+    clean_path(clean_result_2, result_2);
+
+    if (!is_path_valid(clean_result_1, imgFile, BPBstruct, true, nullptr, false)
+        && !is_path_valid(clean_result_1, imgFile, BPBstruct, false, nullptr, false)) return; // Checks if file exists, it shouldn't
+    if (!is_path_valid(clean_result_2, imgFile, BPBstruct, false, nullptr, false)) return; // Checks if file exists, it shouldn't
+
+    string filename = clean_result_1.back();
+    clean_result_1.pop_back();
+
+    string backup_current_working_dir = current_working_dir;
+    string cd_directory;
+    concat_string(cd_directory, clean_result_1);
+    cd_command(cd_directory, imgFile, BPBstruct, current_working_dir);
+
+    auto* fat_entries_p = find_entries(current_dir_cluster_no, imgFile, BPBstruct);
+    auto& fat_entries = *fat_entries_p;
+
+    int size_of_fatFileEntry = sizeof(FatFileEntry);
+    FatFileEntry tmp_file;
+    bool is_deleted = false;
+    string str1;
+    vector<pair<string, vector<FatFileEntry> > > entries;
+
+    FatFileEntry msdos;
+    FatFileEntry previous_msdos;
+    for (int i = 0; i < 8; i++) // TODO: For . and .. entries. It could be unnecessary in touch. Check this in mkdir.
+        previous_msdos.msdos.filename[i] = 32;
+
+    // TODO: Should we check for deleted files?
+    uint32_t free_cluster;
+    pair<string, vector<FatFileEntry> > entry;
+    bool is_found = false;
+    for (auto& root_fat_entry : fat_entries) {
+        if (is_found) break;
+        fseek(imgFile, beginning_of_clusters + (root_fat_entry - BPBstruct.extended.RootCluster)*bytes_per_cluster, SEEK_SET); // TODO: CHECK IF ROOTCLUSTER EDIT WORKS
+        auto* tmp_file = new FatFileEntry; // TODO: Change this to stack allocation.
+        for (int j = 0; j < bytes_per_cluster; j+=size_of_fatFileEntry) {
+            fread(tmp_file, size_of_fatFileEntry, 1, imgFile);
+            if (tmp_file->msdos.filename[0] == 0x2E) continue;
+            else if (tmp_file->lfn.attributes == 15) { // It is LFN.
+                entry.second.push_back(*tmp_file);
+                str1.insert(0, lfn_name_extract(tmp_file));
+                if (tmp_file->lfn.sequence_number == 0xE5) {
+                    is_deleted = true;
+                }
+            }
+            else {
+                if (is_deleted) {
+                    str1.clear();
+                    is_deleted = false;
+                    entry.first.clear();
+                    entry.second.clear();
+                }
+                else if (str1.length() > 0) {
+                    if (str1 == filename) {
+                        is_found = true;
+                        entry.first = str1;
+                        entry.second.push_back(*tmp_file);
+                        entries.push_back(entry);
+
+                        bool is_directory = (entry.second.back().msdos.attributes & 0x10) == 0x10;
+                        FatFileEntry folder_msdos = entry.second.back();
+
+                        // TODO: Update double dot entries of entries (if it is a directory)
+
+                        cd_command(cd_directory, imgFile, BPBstruct, current_working_dir);
+                        // TODO: Mark deleted old directories/files.
+                        fseek(imgFile, -(((int)size_of_fatFileEntry)*(int)entry.second.size()), SEEK_CUR);
+                       uint8_t deleted = 0xE5;
+                       for (int k = 0; k < entry.second.size(); k++) {
+                            fwrite(&deleted, 1, 1, imgFile);
+                            fseek(imgFile, size_of_fatFileEntry - 1, SEEK_CUR);
+                        //     FatFileEntry tmp_entry = entry.second[k];
+                        //     tmp_entry.lfn.sequence_number = 0xE5;
+                        //    fwrite(&tmp_entry, size_of_fatFileEntry, 1, imgFile);
+                        //    fseek(imgFile, size_of_fatFileEntry - 1, SEEK_CUR);
+                       }
+                    //    fseek(imgFile, size_of_fatFileEntry, SEEK_CUR);
+                    //    cd_command(cd_directory, imgFile, BPBstruct, current_working_dir);
+
+                        string backup_current_working_dir_2 = current_working_dir;
+                        string cd_directory_2;
+                        concat_string(cd_directory_2, clean_result_2);
+                        cd_command(cd_directory_2, imgFile, BPBstruct, current_working_dir);
+
+
+                        // TODO: Put the entries into new directory, if there is not enough space, allocate new cluster.
+
+                            // TODO: Change the msdos filename (ie ~1, ~2)
+                            parsed_input touch_input;
+                            char* touch_arg1 = new char[filename.size()];
+
+                            for (int l = 0; l < filename.size(); l++)
+                                touch_arg1[l] = filename[l];
+
+                            touch_arg1[filename.size()] = '\0';
+                            touch_input.arg1 = touch_arg1;
+                            touch_command(touch_input, imgFile, BPBstruct, current_working_dir, &entry.second);
+
+                            delete[] touch_arg1;
+
+                        if (is_directory) {
+                            fseek(imgFile, beginning_of_clusters+(folder_msdos.msdos.firstCluster - BPBstruct.extended.RootCluster)*bytes_per_cluster, SEEK_SET);
+                            fseek(imgFile, size_of_fatFileEntry, SEEK_CUR);
+                            FatFileEntry double_dot_entry;
+                            fread(&double_dot_entry, size_of_fatFileEntry, 1, imgFile);
+                            if (double_dot_entry.msdos.filename[0] == 0x2E && double_dot_entry.msdos.filename[1] == 0x2E) {
+                                fseek(imgFile, -size_of_fatFileEntry, SEEK_CUR);
+                                if (!clean_result_2.empty()) {
+                                    clean_result_2.pop_back();
+                                }
+                                string clean_result_2_str;
+                                concat_string(clean_result_2_str, clean_result_2);
+                                cd_command(clean_result_2_str, imgFile, BPBstruct, current_working_dir);
+                                double_dot_entry.msdos.firstCluster = current_dir_cluster_no;
+                                fwrite(&double_dot_entry, size_of_fatFileEntry, 1, imgFile);
+                            }
+                        }
+
+                        cd_command(backup_current_working_dir_2, imgFile, BPBstruct, current_working_dir);
+                    }
+                    str1.clear();
+                }
+                entry.first.clear();
+                entry.second.clear();
+            }
+            if (is_found) break;
+        }
+        delete tmp_file;
+    }
+
+    cd_command(backup_current_working_dir, imgFile, BPBstruct, current_working_dir);
+
 }
 
 int main(int argc, char *argv[]) {
     string current_working_dir = "/";
-    bool is_development = true; // TODO: Change this to false before submission
+    bool is_development = false; // TODO: Change this to false before submission
     if (argc != 2) {
         exit(1);
     }
@@ -751,6 +942,9 @@ int main(int argc, char *argv[]) {
         }
         else if (input.type == MKDIR) {
             mkdir_command(input, imgFile, BPBstruct, current_working_dir);
+        }
+        else if (input.type == MV) {
+            mv_command(input, imgFile, BPBstruct, current_working_dir);
         }
 
         clean_input(&input);
